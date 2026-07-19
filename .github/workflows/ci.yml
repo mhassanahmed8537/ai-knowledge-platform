@@ -63,7 +63,9 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     env:
-      DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/knowledge_platform
+      DATABASE_URL: postgresql+asyncpg://app_user:app_password@localhost:5432/knowledge_platform
+      AUTH_DATABASE_URL: postgresql+asyncpg://app_auth:auth_password@localhost:5432/knowledge_platform
+      MIGRATION_DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/knowledge_platform
       REDIS_URL: redis://localhost:6379/0
     steps:
       - uses: actions/checkout@v4
@@ -79,6 +81,9 @@ jobs:
 
       - name: Sync workspace
         run: uv sync --all-packages --frozen
+
+      - name: Prepare database (roles + migrations)
+        run: uv run python scripts/prepare_db.py
 
       - name: Run tests
         run: uv run pytest -q

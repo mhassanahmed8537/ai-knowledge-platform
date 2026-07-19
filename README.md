@@ -75,11 +75,19 @@ uv run --package worker celery -A worker.celery_app.celery_app worker --loglevel
 uv run ruff check .        # lint
 uv run ruff format .       # format
 uv run mypy libs/core/core services/api/src/api services/worker/src/worker
-uv run pytest -q           # tests
+uv run pytest -q           # unit + integration tests
 pre-commit install         # enable git hooks
 ```
 
-CI (`.github/workflows/ci.yml`) runs lint + format-check + mypy, and a separate test job with Postgres/Redis service containers, on every push to `main` and every PR.
+Unit tests (`tests/unit`) need no services. Integration tests (`tests/integration`)
+drive the real app via httpx against Postgres and are **auto-skipped when the DB is
+unreachable** — bring up the stack and run `prepare_db.py` first to exercise them.
+They cover the auth flow, tenant RLS isolation, the RBAC matrix, and the API-key
+lifecycle, each in its own throwaway `itest-` org (cleaned up on teardown).
+
+CI (`.github/workflows/ci.yml`) runs lint + format-check + mypy, and a separate test
+job that spins up Postgres/Redis service containers, runs `prepare_db.py`, then the
+full suite — on every push to `main` and every PR.
 
 ## First-time database setup
 
@@ -87,14 +95,17 @@ The runtime never connects as a superuser. Create the least-privilege roles once
 then run migrations (which apply the RLS policies and grant those roles):
 
 ```bash
+cp .env.example .env
 docker compose up postgres redis minio -d
 
-# 1. Create the app_user / app_auth roles (cluster-level, run once)
-docker compose exec -T postgres psql -U postgres -d knowledge_platform < scripts/db_bootstrap.sql
-
-# 2. Apply migrations (runs as the migration/owner role via MIGRATION_DATABASE_URL)
-uv run alembic upgrade head
+# Create the app_user / app_auth roles AND apply migrations in one step:
+uv run python scripts/prepare_db.py
 ```
+
+> Keep `.env` in sync with `.env.example` after pulling — a stale `DATABASE_URL`
+> pointing at a superuser silently disables RLS. `GET /healthz` guards against
+> this: it reports `"rls": "enforced"` and flips to `"UNSAFE-bypass"` /
+> `"status": "degraded"` if the runtime role can bypass RLS.
 
 New migrations: `uv run alembic revision --autogenerate -m "message"` then review before `upgrade`.
 
