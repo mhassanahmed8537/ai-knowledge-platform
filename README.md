@@ -2,7 +2,7 @@
 
 An enterprise-grade, multi-tenant **RAG (Retrieval-Augmented Generation)** platform. Organizations upload their private documents; their users ask natural-language questions and receive streamed, cited answers grounded in their own corpus — with strict tenant isolation, auth, observability, and cost tracking throughout.
 
-> Status: **Phase 0 — scaffolding & local dev.** The application logic (auth, ingestion, retrieval, generation) is built out in subsequent phases.
+> Status: **Phase 1 complete — auth & multi-tenancy.** JWT + OAuth auth, Postgres RLS tenant isolation, RBAC, API keys, and core CRUD are built and verified. Ingestion / retrieval / generation follow in later phases.
 
 ## Architecture at a glance
 
@@ -81,10 +81,66 @@ pre-commit install         # enable git hooks
 
 CI (`.github/workflows/ci.yml`) runs lint + format-check + mypy, and a separate test job with Postgres/Redis service containers, on every push to `main` and every PR.
 
+## First-time database setup
+
+The runtime never connects as a superuser. Create the least-privilege roles once,
+then run migrations (which apply the RLS policies and grant those roles):
+
+```bash
+docker compose up postgres redis minio -d
+
+# 1. Create the app_user / app_auth roles (cluster-level, run once)
+docker compose exec -T postgres psql -U postgres -d knowledge_platform < scripts/db_bootstrap.sql
+
+# 2. Apply migrations (runs as the migration/owner role via MIGRATION_DATABASE_URL)
+uv run alembic upgrade head
+```
+
+New migrations: `uv run alembic revision --autogenerate -m "message"` then review before `upgrade`.
+
+## Auth & multi-tenancy
+
+Three Postgres roles enforce least privilege:
+
+| Role | Used by | RLS |
+| --- | --- | --- |
+| `postgres` | Alembic migrations only | owner (bypasses) |
+| `app_auth` | Auth subsystem only (login/signup/refresh/oauth, API-key lookup) | **BYPASSRLS** — inherently cross-tenant |
+| `app_user` | All authenticated business logic | **enforced** |
+
+Every org-scoped table has `ENABLE`+`FORCE ROW LEVEL SECURITY` with a fail-closed
+`org_isolation` policy keyed on the `app.current_org_id` GUC, which the API sets
+per-request (via `set_config`) after decoding the caller's identity. `app_user`
+therefore cannot read or write across tenants even if application code omits a
+`WHERE org_id = …` clause.
+
+- **Tokens:** short-lived JWT access token + rotating opaque refresh token (stored
+  hashed, revoked on rotation/logout). Argon2 password hashing.
+- **API keys:** `POST /api-keys` returns the plaintext once; only a SHA-256 is
+  stored. Authenticate with `X-API-Key`; the key inherits its still-active
+  creator's role.
+- **RBAC:** `admin` / `member` / `read_only` via a `require_role()` dependency.
+
+### OAuth setup (Google / GitHub)
+
+Endpoints exist at `/auth/oauth/{provider}/authorize` and `/callback`. A provider
+is enabled only when its credentials are set; otherwise `authorize` returns 404.
+Configure in `.env`:
+
+```
+GOOGLE_CLIENT_ID=…       GOOGLE_CLIENT_SECRET=…
+GITHUB_CLIENT_ID=…       GITHUB_CLIENT_SECRET=…
+OAUTH_REDIRECT_BASE_URL=http://localhost:8000
+```
+
+Register the callback URL `…/auth/oauth/<provider>/callback` in the provider's
+console. First OAuth login provisions a new org + admin (passwordless); a matching
+email links to the existing user.
+
 ## Build plan
 
-- **Phase 0** — Scaffolding, local dev stack, CI *(current)*
-- **Phase 1** — Auth (JWT + OAuth), multi-tenancy (RLS), RBAC, API keys, core CRUD, Alembic
+- ✅ **Phase 0** — Scaffolding, local dev stack, CI
+- ✅ **Phase 1** — Auth (JWT + OAuth), multi-tenancy (RLS), RBAC, API keys, core CRUD, Alembic
 - **Phase 2** — Ingestion (PDF end-to-end first): upload → chunk → embed → pgvector, via Celery
 - **Phase 3** — Hybrid retrieval: BM25 (Postgres FTS) + vector, fusion/reranking
 - **Phase 4** — Generation: LangGraph pipeline, SSE streaming, session memory, inline citations, prompt versioning

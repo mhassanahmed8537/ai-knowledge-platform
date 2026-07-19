@@ -46,7 +46,7 @@ strict = true
 mypy_path = ["libs/core", "services/api/src", "services/worker/src"]
 
 [[tool.mypy.overrides]]
-module = ["celery.*"]
+module = ["celery.*", "authlib.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

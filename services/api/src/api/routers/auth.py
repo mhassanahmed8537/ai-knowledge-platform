@@ -2,11 +2,14 @@ import re
 import secrets
 from datetime import UTC, datetime, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from authlib.integrations.base_client import OAuthError
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi.responses import RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.deps import get_auth_session, get_current_user
+from api.oauth_clients import extract_identity, get_client
 from api.schemas import (
     LoginRequest,
     RefreshRequest,
@@ -22,8 +25,8 @@ from api.security import (
     verify_password,
 )
 from core.config import get_settings
-from core.enums import UserRole
-from core.models import Organization, RefreshToken, User
+from core.enums import OAuthProvider, UserRole
+from core.models import OAuthAccount, Organization, RefreshToken, User
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -144,3 +147,105 @@ async def logout(
 @router.get("/me", response_model=UserOut)
 async def me(user: User = Depends(get_current_user)) -> User:
     return user
+
+
+# --- OAuth (Google / GitHub) ---
+def _require_provider(provider: OAuthProvider):  # type: ignore[no-untyped-def]
+    client = get_client(provider)
+    if client is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"OAuth provider '{provider.value}' is not configured",
+        )
+    return client
+
+
+@router.get("/oauth/{provider}/authorize")
+async def oauth_authorize(provider: OAuthProvider, request: Request) -> RedirectResponse:
+    client = _require_provider(provider)
+    redirect_uri = f"{get_settings().oauth_redirect_base_url}/auth/oauth/{provider.value}/callback"
+    result: RedirectResponse = await client.authorize_redirect(request, redirect_uri)
+    return result
+
+
+@router.get("/oauth/{provider}/callback", response_model=TokenResponse)
+async def oauth_callback(
+    provider: OAuthProvider,
+    request: Request,
+    session: AsyncSession = Depends(get_auth_session),
+) -> TokenResponse:
+    client = _require_provider(provider)
+    try:
+        token = await client.authorize_access_token(request)
+    except OAuthError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="OAuth exchange failed"
+        ) from exc
+
+    identity = await extract_identity(provider, client, token)
+
+    # 1) Already-linked provider account -> log in.
+    linked = await session.scalar(
+        select(OAuthAccount).where(
+            OAuthAccount.provider == provider,
+            OAuthAccount.provider_account_id == identity.provider_account_id,
+        )
+    )
+    if linked is not None:
+        user = await session.get(User, linked.user_id)
+        if user is None or not user.is_active:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User is inactive")
+        tokens = await _issue_tokens(session, user)
+        await session.commit()
+        return tokens
+
+    if identity.email is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="OAuth provider did not return a usable email",
+        )
+
+    # 2) Existing local user with that email -> link the provider account.
+    user = await session.scalar(select(User).where(User.email == identity.email))
+    if user is not None:
+        session.add(
+            OAuthAccount(
+                user_id=user.id,
+                provider=provider,
+                provider_account_id=identity.provider_account_id,
+            )
+        )
+        tokens = await _issue_tokens(session, user)
+        await session.commit()
+        return tokens
+
+    # 3) First-time login -> provision a new org + admin (passwordless).
+    local_part = identity.email.split("@", 1)[0]
+    slug = _slugify(identity.full_name or local_part)
+    if await session.scalar(select(Organization).where(Organization.slug == slug)) is not None:
+        slug = f"{slug}-{secrets.token_hex(3)}"
+
+    org = Organization(name=identity.full_name or f"{local_part}'s Organization", slug=slug)
+    session.add(org)
+    await session.flush()
+
+    user = User(
+        org_id=org.id,
+        email=identity.email,
+        hashed_password=None,
+        full_name=identity.full_name,
+        role=UserRole.ADMIN,
+    )
+    session.add(user)
+    await session.flush()
+    session.add(
+        OAuthAccount(
+            user_id=user.id,
+            provider=provider,
+            provider_account_id=identity.provider_account_id,
+        )
+    )
+
+    tokens = await _issue_tokens(session, user)
+    await session.commit()
+    return tokens

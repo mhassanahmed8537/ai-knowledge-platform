@@ -36,6 +36,8 @@ class Settings(BaseSettings):
     access_token_ttl_seconds: int = 15 * 60
     refresh_token_ttl_seconds: int = 14 * 24 * 60 * 60
     api_key_prefix: str = "akp_"
+    # Signs the short-lived cookie that carries OAuth state across the redirect.
+    session_secret: str = "dev-insecure-session-0123456789abcdef"
 
     # --- OAuth (Phase 1d; optional, empty disables the provider) ---
     google_client_id: str = ""
