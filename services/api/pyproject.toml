@@ -6,6 +6,9 @@ dependencies = [
     "core",
     "fastapi>=0.115",
     "uvicorn[standard]>=0.32",
+    "pyjwt>=2.10",
+    "pwdlib[argon2]>=0.2.1",
+    "email-validator>=2.2",
 ]
 
 [tool.uv.sources]
