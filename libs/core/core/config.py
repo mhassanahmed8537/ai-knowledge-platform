@@ -67,6 +67,21 @@ class Settings(BaseSettings):
     search_default_limit: int = 10
     search_max_limit: int = 50
 
+    # --- Generation (Phase 4) ---
+    # "stub" (deterministic, zero-cost dev default), "anthropic", or "openai".
+    llm_provider: str = "stub"
+    anthropic_api_key: str = ""
+    # Opus 4.8 is the current default Claude model. Note: temperature/top_p/top_k
+    # are rejected by this model family, so the provider never sends them.
+    anthropic_model: str = "claude-opus-4-8"
+    openai_chat_model: str = "gpt-4o-mini"
+    # Deliberately modest: grounded RAG answers are short. Raise for long-form.
+    llm_max_tokens: int = 4096
+    # Thinking depth / token spend: low | medium | high | xhigh | max.
+    llm_effort: str = "medium"
+    # Chunks passed to the model as numbered sources for citation.
+    generation_context_chunks: int = 8
+
     @property
     def broker_url(self) -> str:
         return self.celery_broker_url or self.redis_url
