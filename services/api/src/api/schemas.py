@@ -82,6 +82,17 @@ class DocumentOut(BaseModel):
     filename: str | None
     content_type: str | None
     status: DocumentStatus
+    error: str | None = None
+    created_at: datetime
+
+
+class DocumentChunkOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    chunk_index: int
+    content: str
+    token_count: int
     created_at: datetime
 
 

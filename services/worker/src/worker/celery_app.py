@@ -6,9 +6,9 @@ settings = get_settings()
 
 celery_app = Celery(
     "worker",
-    broker=settings.redis_url,
+    broker=settings.broker_url,
     backend=settings.redis_url,
-    include=["worker.tasks.ping"],
+    include=["worker.tasks.ping", "worker.tasks.ingest"],
 )
 
 celery_app.conf.update(

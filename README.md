@@ -2,7 +2,10 @@
 
 An enterprise-grade, multi-tenant **RAG (Retrieval-Augmented Generation)** platform. Organizations upload their private documents; their users ask natural-language questions and receive streamed, cited answers grounded in their own corpus — with strict tenant isolation, auth, observability, and cost tracking throughout.
 
-> Status: **Phase 1 complete — auth & multi-tenancy.** JWT + OAuth auth, Postgres RLS tenant isolation, RBAC, API keys, and core CRUD are built and verified. Ingestion / retrieval / generation follow in later phases.
+> Status: **Phase 2 complete — ingestion.** On top of Phase 1 (JWT + OAuth auth,
+> Postgres RLS isolation, RBAC, API keys, CRUD), PDFs now flow: upload → MinIO →
+> Celery worker → text extraction → chunking → embeddings → pgvector. Retrieval /
+> generation follow in later phases.
 
 ## Architecture at a glance
 
@@ -148,11 +151,35 @@ Register the callback URL `…/auth/oauth/<provider>/callback` in the provider's
 console. First OAuth login provisions a new org + admin (passwordless); a matching
 email links to the existing user.
 
+## Ingestion (Phase 2)
+
+`POST /documents/upload` (multipart PDF) stores the file in MinIO/S3, creates a
+`pending` document, and — after the request commits — enqueues a Celery job. The
+worker runs the pipeline as the RLS-enforced `app_user` with the tenant's org
+context bound:
+
+```
+upload → MinIO → Celery → pypdf extract → chunk → embed → pgvector → status: ready
+```
+
+- **Chunking:** dependency-free word-boundary sliding window (`chunk_size` /
+  `chunk_overlap` configurable).
+- **Embeddings:** pluggable provider. Default `fake` — deterministic, unit-norm,
+  **zero-cost**, reproducible in tests. Set `EMBEDDING_PROVIDER=openai` +
+  `OPENAI_API_KEY` to use `text-embedding-3-small` (same 1536 dims → no schema
+  change). Vectors land in a `document_chunks` table with an HNSW cosine index,
+  itself RLS-scoped by `org_id`.
+- **Status:** poll `GET /documents/{id}` (`pending`→`processing`→`ready`/`failed`,
+  with `error` on failure). Inspect results via `GET /documents/{id}/chunks`.
+
+The pipeline lives in `libs/core` as a plain async function, so integration tests
+drive it directly; the Celery worker path is verified end-to-end against the stack.
+
 ## Build plan
 
 - ✅ **Phase 0** — Scaffolding, local dev stack, CI
 - ✅ **Phase 1** — Auth (JWT + OAuth), multi-tenancy (RLS), RBAC, API keys, core CRUD, Alembic
-- **Phase 2** — Ingestion (PDF end-to-end first): upload → chunk → embed → pgvector, via Celery
+- ✅ **Phase 2** — Ingestion: PDF upload → MinIO → Celery → extract → chunk → embed → pgvector
 - **Phase 3** — Hybrid retrieval: BM25 (Postgres FTS) + vector, fusion/reranking
 - **Phase 4** — Generation: LangGraph pipeline, SSE streaming, session memory, inline citations, prompt versioning
 - **Phase 5** — Admin/ops: usage analytics, per-tenant cost tracking + budget alerts, webhooks

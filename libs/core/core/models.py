@@ -1,12 +1,15 @@
 import uuid
 from datetime import datetime
 
+from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     Boolean,
     DateTime,
     ForeignKey,
+    Integer,
     MetaData,
     String,
+    Text,
     UniqueConstraint,
     func,
     text,
@@ -15,7 +18,10 @@ from sqlalchemy.dialects.postgresql import ENUM as PgEnum
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
+from core.config import get_settings
 from core.enums import DocumentStatus, OAuthProvider, UserRole
+
+EMBEDDING_DIM = get_settings().embedding_dim
 
 # Stable constraint naming so Alembic autogenerate/downgrade produce deterministic names.
 NAMING_CONVENTION = {
@@ -85,7 +91,7 @@ class User(Base):
     created_at: Mapped[datetime] = _created_at()
     updated_at: Mapped[datetime] = _updated_at()
 
-    organization: Mapped["Organization"] = relationship(back_populates="users")
+    organization: Mapped[Organization] = relationship(back_populates="users")
 
 
 class OAuthAccount(Base):
@@ -150,6 +156,8 @@ class Document(Base):
     title: Mapped[str] = mapped_column(String(512), nullable=False)
     filename: Mapped[str | None] = mapped_column(String(512), nullable=True)
     content_type: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    storage_key: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    error: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     status: Mapped[DocumentStatus] = mapped_column(
         PgEnum(
             DocumentStatus, name="document_status", values_callable=lambda e: [m.value for m in e]
@@ -159,3 +167,23 @@ class Document(Base):
     )
     created_at: Mapped[datetime] = _created_at()
     updated_at: Mapped[datetime] = _updated_at()
+
+
+class DocumentChunk(Base):
+    __tablename__ = "document_chunks"
+    __table_args__ = (
+        UniqueConstraint("document_id", "chunk_index", name="uq_document_chunks_doc_index"),
+    )
+
+    id: Mapped[uuid.UUID] = _pk()
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    document_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("documents.id", ondelete="CASCADE"), nullable=False
+    )
+    chunk_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    token_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    embedding: Mapped[list[float]] = mapped_column(Vector(EMBEDDING_DIM), nullable=False)
+    created_at: Mapped[datetime] = _created_at()

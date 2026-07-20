@@ -46,6 +46,23 @@ class Settings(BaseSettings):
     github_client_secret: str = ""
     oauth_redirect_base_url: str = "http://localhost:8000"
 
+    # --- Ingestion (Phase 2) ---
+    celery_broker_url: str = ""  # falls back to redis_url when empty
+    chunk_size: int = 1000
+    chunk_overlap: int = 150
+    max_upload_bytes: int = 25 * 1024 * 1024
+
+    # Embeddings: "fake" (deterministic, zero-cost dev default) or "openai".
+    embedding_provider: str = "fake"
+    embedding_dim: int = 1536
+    openai_api_key: str = ""
+    openai_embedding_model: str = "text-embedding-3-small"
+    openai_base_url: str = "https://api.openai.com/v1"
+
+    @property
+    def broker_url(self) -> str:
+        return self.celery_broker_url or self.redis_url
+
 
 @lru_cache
 def get_settings() -> Settings:
