@@ -2,10 +2,10 @@
 
 An enterprise-grade, multi-tenant **RAG (Retrieval-Augmented Generation)** platform. Organizations upload their private documents; their users ask natural-language questions and receive streamed, cited answers grounded in their own corpus — with strict tenant isolation, auth, observability, and cost tracking throughout.
 
-> Status: **Phase 3 complete — hybrid retrieval.** On top of Phase 1 (auth,
-> RLS, RBAC) and Phase 2 (PDF → MinIO → Celery → pgvector), `POST /search` now
-> does hybrid retrieval: Postgres full-text (BM25-style) + pgvector similarity,
-> fused with Reciprocal Rank Fusion. LLM generation follows in Phase 4.
+> Status: **Phase 4 complete — RAG chat with citations.** Upload PDFs, ask
+> questions, and get streamed answers grounded in your own corpus with inline
+> citations back to the source chunk — over a LangGraph retrieve→generate→cite
+> pipeline, with multi-turn memory and per-tenant prompt versioning.
 
 ## Architecture at a glance
 
@@ -193,6 +193,36 @@ against each other. `mode` selects `hybrid` (default), `vector`, or `lexical`.
 > vocabulary — enough to exercise fusion realistically offline. True semantic
 > matching arrives by setting `EMBEDDING_PROVIDER=openai`.
 
+## Chat with citations (Phase 4)
+
+```
+POST /conversations                      -> create a session
+POST /conversations/{id}/messages        -> SSE: token* -> citations -> done
+GET  /conversations/{id}/messages        -> replay history (with citations)
+```
+
+The pipeline is a **LangGraph** `StateGraph` — `retrieve → generate → cite`:
+
+1. **retrieve** — hybrid search (Phase 3) for the top `generation_context_chunks`,
+   then renders them as line-leading numbered sources into the system prompt.
+2. **generate** — streams tokens from the configured LLM provider, emitted live
+   through LangGraph's custom stream writer.
+3. **cite** — maps the `[n]` markers the model actually used back to the exact
+   chunk and document. Markers outside the retrieved range (a hallucinated
+   citation) are dropped rather than surfaced, and each source is reported once.
+
+Consuming `stream_mode=["custom", "values"]` yields live tokens *and* the final
+state in one run, so the endpoint can stream text immediately and emit resolved
+citations at the end.
+
+- **Session memory:** prior turns are persisted and replayed into the prompt
+  (bounded by `max_history_messages`). Assistant turns store their citations, so
+  history replays fully attributed.
+- **Prompt versioning:** `prompt_templates` is versioned per tenant, with a
+  partial unique index enforcing **at most one active version per (org, name)** —
+  so activating a version is atomic and rollback is a single `UPDATE`. Tenants
+  without a custom prompt fall back to the built-in default.
+
 ## Model providers (vendor-agnostic)
 
 Generation and embeddings are independent, swappable providers behind two
@@ -229,6 +259,6 @@ pipeline runs and is CI-tested without any vendor key.
 - ✅ **Phase 1** — Auth (JWT + OAuth), multi-tenancy (RLS), RBAC, API keys, core CRUD, Alembic
 - ✅ **Phase 2** — Ingestion: PDF upload → MinIO → Celery → extract → chunk → embed → pgvector
 - ✅ **Phase 3** — Hybrid retrieval: BM25 (Postgres FTS) + pgvector, Reciprocal Rank Fusion
-- **Phase 4** — Generation: LangGraph pipeline, SSE streaming, session memory, inline citations, prompt versioning
+- ✅ **Phase 4** — Generation: LangGraph pipeline, SSE streaming, session memory, inline citations, prompt versioning
 - **Phase 5** — Admin/ops: usage analytics, per-tenant cost tracking + budget alerts, webhooks
 - **Phase 6** — K8s/Terraform/CI-CD hardening, security pass

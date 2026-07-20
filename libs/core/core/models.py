@@ -16,11 +16,11 @@ from sqlalchemy import (
     text,
 )
 from sqlalchemy.dialects.postgresql import ENUM as PgEnum
-from sqlalchemy.dialects.postgresql import TSVECTOR, UUID
+from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 from core.config import get_settings
-from core.enums import DocumentStatus, OAuthProvider, UserRole
+from core.enums import DocumentStatus, MessageRole, OAuthProvider, UserRole
 
 EMBEDDING_DIM = get_settings().embedding_dim
 
@@ -193,4 +193,62 @@ class DocumentChunk(Base):
         Computed("to_tsvector('english', content)", persisted=True),
         nullable=False,
     )
+    created_at: Mapped[datetime] = _created_at()
+
+
+class Conversation(Base):
+    __tablename__ = "conversations"
+
+    id: Mapped[uuid.UUID] = _pk()
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    title: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    created_at: Mapped[datetime] = _created_at()
+    updated_at: Mapped[datetime] = _updated_at()
+
+
+class Message(Base):
+    __tablename__ = "messages"
+
+    id: Mapped[uuid.UUID] = _pk()
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    conversation_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("conversations.id", ondelete="CASCADE"), nullable=False
+    )
+    role: Mapped[MessageRole] = mapped_column(
+        PgEnum(MessageRole, name="message_role", values_callable=lambda e: [m.value for m in e]),
+        nullable=False,
+    )
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    # Assistant turns carry the resolved citations so history replays with them.
+    citations: Mapped[list[dict[str, object]] | None] = mapped_column(JSONB, nullable=True)
+    created_at: Mapped[datetime] = _created_at()
+
+
+class PromptTemplate(Base):
+    """Versioned system/RAG prompts, scoped per tenant.
+
+    A partial unique index (see migration) guarantees at most one active version
+    per (org_id, name), which makes activation an atomic rollback point.
+    """
+
+    __tablename__ = "prompt_templates"
+    __table_args__ = (
+        UniqueConstraint("org_id", "name", "version", name="uq_prompt_templates_org_name_version"),
+    )
+
+    id: Mapped[uuid.UUID] = _pk()
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
     created_at: Mapped[datetime] = _created_at()

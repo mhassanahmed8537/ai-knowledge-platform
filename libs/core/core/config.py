@@ -88,6 +88,8 @@ class Settings(BaseSettings):
     llm_effort: str = "medium"
     # Chunks passed to the model as numbered sources for citation.
     generation_context_chunks: int = 8
+    # Prior turns replayed into the prompt (bounds context growth).
+    max_history_messages: int = 20
 
     @property
     def broker_url(self) -> str:

@@ -3,7 +3,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
-from core.enums import DocumentStatus, UserRole
+from core.enums import DocumentStatus, MessageRole, UserRole
 from core.retrieval import SearchMode
 
 
@@ -110,6 +110,42 @@ class SearchHitOut(BaseModel):
     chunk_index: int
     content: str
     score: float
+
+
+class ConversationCreate(BaseModel):
+    title: str | None = Field(default=None, max_length=512)
+
+
+class ConversationOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    org_id: uuid.UUID
+    title: str | None
+    created_at: datetime
+
+
+class CitationOut(BaseModel):
+    marker: int
+    chunk_id: uuid.UUID
+    document_id: uuid.UUID
+    document_title: str
+    snippet: str
+
+
+class MessageOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    conversation_id: uuid.UUID
+    role: MessageRole
+    content: str
+    citations: list[CitationOut] | None
+    created_at: datetime
+
+
+class ChatRequest(BaseModel):
+    message: str = Field(min_length=1, max_length=8000)
 
 
 class ApiKeyCreate(BaseModel):

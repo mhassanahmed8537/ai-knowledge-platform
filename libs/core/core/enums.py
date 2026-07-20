@@ -17,3 +17,8 @@ class DocumentStatus(enum.StrEnum):
 class OAuthProvider(enum.StrEnum):
     GOOGLE = "google"
     GITHUB = "github"
+
+
+class MessageRole(enum.StrEnum):
+    USER = "user"
+    ASSISTANT = "assistant"
