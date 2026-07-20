@@ -3,8 +3,9 @@
 The stub provider is the zero-cost dev default: it reads the numbered sources
 out of the system prompt and emits a deterministic answer with inline citation
 markers, so the whole generation path (streaming, citation parsing, session
-memory) is exercisable offline and in CI. The Anthropic and OpenAI providers
-implement the identical streaming interface and activate via config.
+memory) is exercisable offline and in CI. The Anthropic (Claude), OpenAI (GPT),
+and Google (Gemini) providers implement the identical streaming interface and
+activate via config — nothing outside this module knows which vendor is in use.
 """
 
 import re
@@ -131,6 +132,66 @@ class OpenAILLMProvider:
         return _gen()
 
 
+def to_gemini_contents(messages: list[dict[str, str]]) -> list[dict[str, Any]]:
+    """Map our {user,assistant} turns onto Gemini's {user,model} `contents`."""
+    return [
+        {
+            "role": "model" if m["role"] == "assistant" else "user",
+            "parts": [{"text": m["content"]}],
+        }
+        for m in messages
+    ]
+
+
+class GeminiLLMProvider:
+    """Google Gemini generation via the Generative Language REST API.
+
+    Gemini names the assistant role "model" and carries the system prompt in a
+    separate `systemInstruction` field rather than as a message.
+    """
+
+    name = "gemini"
+
+    def __init__(self, *, api_key: str, model: str, max_tokens: int, base_url: str) -> None:
+        self._api_key = api_key
+        self._model = model
+        self._max_tokens = max_tokens
+        self._base_url = base_url.rstrip("/")
+
+    def astream(self, *, system: str, messages: list[dict[str, str]]) -> AsyncIterator[str]:
+        async def _gen() -> AsyncIterator[str]:
+            import json
+
+            import httpx
+
+            payload = {
+                "contents": to_gemini_contents(messages),
+                "systemInstruction": {"parts": [{"text": system}]},
+                "generationConfig": {"maxOutputTokens": self._max_tokens},
+            }
+            url = f"{self._base_url}/models/{self._model}:streamGenerateContent"
+            async with (
+                httpx.AsyncClient(timeout=120.0) as client,
+                client.stream(
+                    "POST",
+                    url,
+                    params={"alt": "sse", "key": self._api_key},
+                    json=payload,
+                ) as response,
+            ):
+                response.raise_for_status()
+                async for line in response.aiter_lines():
+                    if not line.startswith("data: "):
+                        continue
+                    chunk = json.loads(line[len("data: ") :])
+                    for candidate in chunk.get("candidates", []):
+                        for part in candidate.get("content", {}).get("parts", []):
+                            if text := part.get("text"):
+                                yield text
+
+        return _gen()
+
+
 @lru_cache
 def get_llm_provider() -> LLMProvider:
     settings = get_settings()
@@ -151,5 +212,14 @@ def get_llm_provider() -> LLMProvider:
             model=settings.openai_chat_model,
             max_tokens=settings.llm_max_tokens,
             base_url=settings.openai_base_url,
+        )
+    if settings.llm_provider == "gemini":
+        if not settings.gemini_api_key:
+            raise RuntimeError("gemini_api_key is required when llm_provider='gemini'")
+        return GeminiLLMProvider(
+            api_key=settings.gemini_api_key,
+            model=settings.gemini_chat_model,
+            max_tokens=settings.llm_max_tokens,
+            base_url=settings.gemini_base_url,
         )
     return StubLLMProvider()

@@ -193,6 +193,36 @@ against each other. `mode` selects `hybrid` (default), `vector`, or `lexical`.
 > vocabulary — enough to exercise fusion realistically offline. True semantic
 > matching arrives by setting `EMBEDDING_PROVIDER=openai`.
 
+## Model providers (vendor-agnostic)
+
+Generation and embeddings are independent, swappable providers behind two
+protocols — nothing outside `libs/core/core/providers/` knows which vendor runs.
+
+| | Default | Claude | GPT | Gemini |
+| --- | --- | :---: | :---: | :---: |
+| **Generation** (`LLM_PROVIDER`) | `stub` | `anthropic` ✅ | `openai` ✅ | `gemini` ✅ |
+| **Embeddings** (`EMBEDDING_PROVIDER`) | `fake` | — ¹ | `openai` ✅ | `gemini` ✅ |
+
+¹ Anthropic does not offer an embeddings API, so Claude answers pair with OpenAI,
+Gemini, or the fake embedder.
+
+Mix freely — e.g. Gemini embeddings with Claude generation:
+
+```bash
+EMBEDDING_PROVIDER=gemini   GEMINI_API_KEY=...
+LLM_PROVIDER=anthropic      ANTHROPIC_API_KEY=...
+```
+
+The defaults (`stub` + `fake`) are deterministic and cost nothing, so the entire
+pipeline runs and is CI-tested without any vendor key.
+
+> **Switching embedding providers requires a re-ingest.** Vectors from different
+> models live in different spaces, and the column is fixed at `EMBEDDING_DIM`
+> (1536). OpenAI `text-embedding-3-small` is natively 1536, and
+> `gemini-embedding-001` is asked for 1536 via `outputDimensionality`, so both
+> fit without a migration — but previously-ingested documents must be re-embedded.
+> Generation providers can be swapped freely with no such cost.
+
 ## Build plan
 
 - ✅ **Phase 0** — Scaffolding, local dev stack, CI

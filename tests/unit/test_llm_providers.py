@@ -1,4 +1,4 @@
-from core.providers.llm import StubLLMProvider
+from core.providers.llm import StubLLMProvider, to_gemini_contents
 
 SYSTEM = """You answer from sources.
 
@@ -35,6 +35,23 @@ async def test_stub_handles_no_sources() -> None:
         provider.astream(system="no sources here", messages=[{"role": "user", "content": "Q"}])
     )
     assert "no sources retrieved" in text
+
+
+def test_gemini_maps_assistant_role_to_model() -> None:
+    # Gemini calls the assistant turn "model" and wraps content in parts[].
+    contents = to_gemini_contents(
+        [
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": "hello"},
+            {"role": "user", "content": "follow up"},
+        ]
+    )
+    assert [c["role"] for c in contents] == ["user", "model", "user"]
+    assert contents[1]["parts"] == [{"text": "hello"}]
+
+
+def test_gemini_contents_empty() -> None:
+    assert to_gemini_contents([]) == []
 
 
 async def test_stub_emits_multiple_chunks() -> None:

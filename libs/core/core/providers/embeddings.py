@@ -69,6 +69,43 @@ class OpenAIEmbeddingProvider:
         return [d["embedding"] for d in data]
 
 
+class GeminiEmbeddingProvider:
+    """Google Gemini embeddings via batchEmbedContents.
+
+    ``gemini-embedding-001`` honours ``outputDimensionality``, so we request the
+    configured dimension and the vectors drop into the existing pgvector column
+    without a schema migration.
+    """
+
+    def __init__(self, *, api_key: str, model: str, dim: int, base_url: str) -> None:
+        self.api_key = api_key
+        self.model = model
+        self.dim = dim
+        self.base_url = base_url.rstrip("/")
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        import httpx
+
+        model_path = f"models/{self.model}"
+        resp = httpx.post(
+            f"{self.base_url}/{model_path}:batchEmbedContents",
+            params={"key": self.api_key},
+            json={
+                "requests": [
+                    {
+                        "model": model_path,
+                        "content": {"parts": [{"text": text}]},
+                        "outputDimensionality": self.dim,
+                    }
+                    for text in texts
+                ]
+            },
+            timeout=60.0,
+        )
+        resp.raise_for_status()
+        return [item["values"] for item in resp.json()["embeddings"]]
+
+
 @lru_cache
 def get_embedding_provider() -> EmbeddingProvider:
     settings = get_settings()
@@ -80,5 +117,14 @@ def get_embedding_provider() -> EmbeddingProvider:
             model=settings.openai_embedding_model,
             dim=settings.embedding_dim,
             base_url=settings.openai_base_url,
+        )
+    if settings.embedding_provider == "gemini":
+        if not settings.gemini_api_key:
+            raise RuntimeError("gemini_api_key is required when embedding_provider='gemini'")
+        return GeminiEmbeddingProvider(
+            api_key=settings.gemini_api_key,
+            model=settings.gemini_embedding_model,
+            dim=settings.embedding_dim,
+            base_url=settings.gemini_base_url,
         )
     return FakeEmbeddingProvider(settings.embedding_dim)

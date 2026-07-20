@@ -60,6 +60,11 @@ class Settings(BaseSettings):
     openai_api_key: str = ""
     openai_embedding_model: str = "text-embedding-3-small"
     openai_base_url: str = "https://api.openai.com/v1"
+    # Gemini. gemini-embedding-001 supports outputDimensionality, so it is asked
+    # for `embedding_dim` vectors and fits the existing schema with no migration.
+    gemini_api_key: str = ""
+    gemini_embedding_model: str = "gemini-embedding-001"
+    gemini_base_url: str = "https://generativelanguage.googleapis.com/v1beta"
 
     # --- Retrieval (Phase 3) ---
     retrieval_candidate_k: int = 50  # candidates fetched per arm before fusion
@@ -68,8 +73,10 @@ class Settings(BaseSettings):
     search_max_limit: int = 50
 
     # --- Generation (Phase 4) ---
-    # "stub" (deterministic, zero-cost dev default), "anthropic", or "openai".
+    # "stub" (zero-cost dev default), "anthropic", "openai", or "gemini".
     llm_provider: str = "stub"
+    # Model names move fast — verify against ai.google.dev/gemini-api/docs/models.
+    gemini_chat_model: str = "gemini-2.5-flash"
     anthropic_api_key: str = ""
     # Opus 4.8 is the current default Claude model. Note: temperature/top_p/top_k
     # are rejected by this model family, so the provider never sends them.
