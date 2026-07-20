@@ -1,13 +1,18 @@
 import asyncio
 import contextlib
+import os
 from collections.abc import AsyncIterator
 
-import asyncpg
-import pytest
-import pytest_asyncio
-from httpx import ASGITransport, AsyncClient
+# Tests drive ingestion deterministically via run_ingestion; don't also enqueue
+# to a real worker (which would double-process and race on the chunk unique key).
+os.environ.setdefault("AUTO_INGEST_ON_UPLOAD", "false")
 
-from core.config import get_settings
+import asyncpg  # noqa: E402
+import pytest  # noqa: E402
+import pytest_asyncio  # noqa: E402
+from httpx import ASGITransport, AsyncClient  # noqa: E402
+
+from core.config import get_settings  # noqa: E402
 
 
 def _dsn() -> str:

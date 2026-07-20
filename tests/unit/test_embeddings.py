@@ -25,3 +25,17 @@ def test_fake_embeddings_are_unit_normalized() -> None:
 def test_different_texts_differ() -> None:
     provider = FakeEmbeddingProvider(dim=64)
     assert provider.embed(["a"])[0] != provider.embed(["b"])[0]
+
+
+def _cosine(a: list[float], b: list[float]) -> float:
+    return sum(x * y for x, y in zip(a, b, strict=True))
+
+
+def test_shared_vocabulary_is_more_similar() -> None:
+    # Feature-hashing: texts sharing words should be closer than disjoint ones.
+    provider = FakeEmbeddingProvider(dim=1536)
+    base = provider.embed(["the quick brown fox jumps"])[0]
+    overlap = provider.embed(["the quick brown fox runs"])[0]
+    disjoint = provider.embed(["databases store rows efficiently"])[0]
+
+    assert _cosine(base, overlap) > _cosine(base, disjoint)

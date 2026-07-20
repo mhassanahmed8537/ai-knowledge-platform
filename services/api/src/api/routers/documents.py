@@ -90,7 +90,8 @@ async def upload_document(
 
     # Enqueue only after the request transaction commits (background tasks run
     # post-response), so the worker can see the row under RLS.
-    background.add_task(enqueue_ingest, doc.id, principal.org_id)
+    if settings.auto_ingest_on_upload:
+        background.add_task(enqueue_ingest, doc.id, principal.org_id)
     return doc
 
 

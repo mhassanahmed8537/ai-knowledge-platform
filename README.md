@@ -2,10 +2,10 @@
 
 An enterprise-grade, multi-tenant **RAG (Retrieval-Augmented Generation)** platform. Organizations upload their private documents; their users ask natural-language questions and receive streamed, cited answers grounded in their own corpus — with strict tenant isolation, auth, observability, and cost tracking throughout.
 
-> Status: **Phase 2 complete — ingestion.** On top of Phase 1 (JWT + OAuth auth,
-> Postgres RLS isolation, RBAC, API keys, CRUD), PDFs now flow: upload → MinIO →
-> Celery worker → text extraction → chunking → embeddings → pgvector. Retrieval /
-> generation follow in later phases.
+> Status: **Phase 3 complete — hybrid retrieval.** On top of Phase 1 (auth,
+> RLS, RBAC) and Phase 2 (PDF → MinIO → Celery → pgvector), `POST /search` now
+> does hybrid retrieval: Postgres full-text (BM25-style) + pgvector similarity,
+> fused with Reciprocal Rank Fusion. LLM generation follows in Phase 4.
 
 ## Architecture at a glance
 
@@ -175,12 +175,30 @@ upload → MinIO → Celery → pypdf extract → chunk → embed → pgvector �
 The pipeline lives in `libs/core` as a plain async function, so integration tests
 drive it directly; the Celery worker path is verified end-to-end against the stack.
 
+## Hybrid retrieval (Phase 3)
+
+`POST /search` `{query, mode, limit}` returns ranked chunks scoped to the caller's
+tenant (RLS). Two retrieval arms run on the same RLS-bound session:
+
+- **Lexical (BM25-style):** a generated `tsvector` column + GIN index; ranked with
+  `ts_rank_cd` over `plainto_tsquery`.
+- **Vector:** pgvector cosine distance over the chunk embeddings (HNSW index). The
+  query is embedded with the *same* provider used at ingestion.
+
+They are combined with **Reciprocal Rank Fusion** (`score = Σ 1/(k + rank)`), which
+is score-scale agnostic — no need to normalise the two very different score ranges
+against each other. `mode` selects `hybrid` (default), `vector`, or `lexical`.
+
+> With the default `fake` embedder (feature-hashing), the vector arm rewards shared
+> vocabulary — enough to exercise fusion realistically offline. True semantic
+> matching arrives by setting `EMBEDDING_PROVIDER=openai`.
+
 ## Build plan
 
 - ✅ **Phase 0** — Scaffolding, local dev stack, CI
 - ✅ **Phase 1** — Auth (JWT + OAuth), multi-tenancy (RLS), RBAC, API keys, core CRUD, Alembic
 - ✅ **Phase 2** — Ingestion: PDF upload → MinIO → Celery → extract → chunk → embed → pgvector
-- **Phase 3** — Hybrid retrieval: BM25 (Postgres FTS) + vector, fusion/reranking
+- ✅ **Phase 3** — Hybrid retrieval: BM25 (Postgres FTS) + pgvector, Reciprocal Rank Fusion
 - **Phase 4** — Generation: LangGraph pipeline, SSE streaming, session memory, inline citations, prompt versioning
 - **Phase 5** — Admin/ops: usage analytics, per-tenant cost tracking + budget alerts, webhooks
 - **Phase 6** — K8s/Terraform/CI-CD hardening, security pass

@@ -51,6 +51,8 @@ class Settings(BaseSettings):
     chunk_size: int = 1000
     chunk_overlap: int = 150
     max_upload_bytes: int = 25 * 1024 * 1024
+    # When true, POST /documents/upload enqueues ingestion automatically.
+    auto_ingest_on_upload: bool = True
 
     # Embeddings: "fake" (deterministic, zero-cost dev default) or "openai".
     embedding_provider: str = "fake"
@@ -58,6 +60,12 @@ class Settings(BaseSettings):
     openai_api_key: str = ""
     openai_embedding_model: str = "text-embedding-3-small"
     openai_base_url: str = "https://api.openai.com/v1"
+
+    # --- Retrieval (Phase 3) ---
+    retrieval_candidate_k: int = 50  # candidates fetched per arm before fusion
+    rrf_k: int = 60  # Reciprocal Rank Fusion constant
+    search_default_limit: int = 10
+    search_max_limit: int = 50
 
     @property
     def broker_url(self) -> str:

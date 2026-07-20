@@ -40,6 +40,22 @@ def get_auth_sessionmaker() -> async_sessionmaker[AsyncSession]:
     return async_sessionmaker(get_auth_engine(), expire_on_commit=False)
 
 
+async def dispose_engines() -> None:
+    """Dispose and reset the engine singletons.
+
+    Each Celery task runs a fresh ``asyncio.run`` (new event loop); pooled
+    asyncpg connections are bound to the loop that created them. Disposing at the
+    end of every task run ensures the next task builds engines on its own loop.
+    """
+    global _engine, _auth_engine
+    if _engine is not None:
+        await _engine.dispose()
+        _engine = None
+    if _auth_engine is not None:
+        await _auth_engine.dispose()
+        _auth_engine = None
+
+
 async def set_org_context(session: AsyncSession, org_id: uuid.UUID) -> None:
     """Bind the current transaction to a tenant so RLS policies filter to it.
 

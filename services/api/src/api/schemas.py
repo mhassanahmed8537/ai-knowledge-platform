@@ -4,6 +4,7 @@ from datetime import datetime
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 from core.enums import DocumentStatus, UserRole
+from core.retrieval import SearchMode
 
 
 class SignupRequest(BaseModel):
@@ -94,6 +95,21 @@ class DocumentChunkOut(BaseModel):
     content: str
     token_count: int
     created_at: datetime
+
+
+class SearchRequest(BaseModel):
+    query: str = Field(min_length=1, max_length=2000)
+    mode: SearchMode = SearchMode.HYBRID
+    limit: int | None = Field(default=None, ge=1, le=50)
+
+
+class SearchHitOut(BaseModel):
+    chunk_id: uuid.UUID
+    document_id: uuid.UUID
+    document_title: str
+    chunk_index: int
+    content: str
+    score: float
 
 
 class ApiKeyCreate(BaseModel):

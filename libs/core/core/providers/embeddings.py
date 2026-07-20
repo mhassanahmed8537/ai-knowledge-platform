@@ -1,18 +1,22 @@
 """Pluggable embedding providers.
 
-The fake provider is the zero-cost dev default: deterministic (same text always
-maps to the same unit vector), so retrieval is reproducible in tests. The OpenAI
-provider implements the identical interface and activates via config once a key
-is present — no schema or call-site change needed.
+The fake provider is the zero-cost dev default: a deterministic **signed
+feature-hashing** (bag-of-words) embedding. Texts that share vocabulary map to
+nearby unit vectors, so both the vector and lexical arms of hybrid retrieval are
+genuinely exercisable offline — while staying reproducible and free. It is
+lexical, not semantic; true semantic similarity comes from swapping in the
+OpenAI provider (identical interface, activated by config, no schema change).
 """
 
 import hashlib
 import math
-import random
+import re
 from functools import lru_cache
 from typing import Protocol, runtime_checkable
 
 from core.config import get_settings
+
+_TOKEN_RE = re.compile(r"[a-z0-9]+")
 
 
 @runtime_checkable
@@ -27,10 +31,17 @@ class FakeEmbeddingProvider:
         self.dim = dim
 
     def _vector(self, text: str) -> list[float]:
-        seed = int.from_bytes(hashlib.sha256(text.encode()).digest(), "big")
-        rng = random.Random(seed)
-        values = [rng.gauss(0.0, 1.0) for _ in range(self.dim)]
-        norm = math.sqrt(sum(v * v for v in values)) or 1.0
+        values = [0.0] * self.dim
+        for token in _TOKEN_RE.findall(text.lower()):
+            digest = hashlib.md5(token.encode()).digest()  # noqa: S324 (non-crypto use)
+            bucket = int.from_bytes(digest[:8], "big") % self.dim
+            values[bucket] += 1.0 if digest[8] & 1 else -1.0
+        norm = math.sqrt(sum(v * v for v in values))
+        if norm == 0.0:
+            # No alphanumeric tokens: fall back to a deterministic unit vector.
+            fallback = int.from_bytes(hashlib.md5(text.encode()).digest()[:8], "big") % self.dim
+            values[fallback] = 1.0
+            return values
         return [v / norm for v in values]
 
     def embed(self, texts: list[str]) -> list[list[float]]:
