@@ -2,13 +2,29 @@ import asyncio
 import uuid
 
 from core.db import dispose_engines
+from core.enums import WebhookEvent
 from core.ingestion import run_ingestion
 from worker.celery_app import celery_app
+from worker.tasks.webhooks import dispatch_webhooks_for_event
 
 
 async def _run(document_id: uuid.UUID, org_id: uuid.UUID) -> int:
     try:
-        return await run_ingestion(document_id, org_id)
+        n_chunks = await run_ingestion(document_id, org_id)
+    except Exception as exc:
+        await dispatch_webhooks_for_event(
+            org_id,
+            WebhookEvent.DOCUMENT_FAILED.value,
+            {"document_id": str(document_id), "error": str(exc)[:500]},
+        )
+        raise
+    else:
+        await dispatch_webhooks_for_event(
+            org_id,
+            WebhookEvent.DOCUMENT_READY.value,
+            {"document_id": str(document_id), "chunk_count": n_chunks},
+        )
+        return n_chunks
     finally:
         # Release this loop's DB connections so the next task starts clean.
         await dispose_engines()

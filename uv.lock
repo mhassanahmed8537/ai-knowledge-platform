@@ -1669,12 +1669,14 @@ source = { editable = "services/worker" }
 dependencies = [
     { name = "celery", extra = ["redis"] },
     { name = "core" },
+    { name = "httpx" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "celery", extras = ["redis"], specifier = ">=5.4" },
     { name = "core", editable = "libs/core" },
+    { name = "httpx", specifier = ">=0.27" },
 ]
 
 [[package]]

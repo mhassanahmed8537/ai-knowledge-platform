@@ -6,6 +6,7 @@ registered name over the shared broker, keeping the two services decoupled.
 
 import uuid
 from functools import lru_cache
+from typing import Any
 
 from celery import Celery
 
@@ -19,3 +20,7 @@ def _producer() -> Celery:
 
 def enqueue_ingest(document_id: uuid.UUID, org_id: uuid.UUID) -> None:
     _producer().send_task("worker.ingest_document", args=[str(document_id), str(org_id)])
+
+
+def enqueue_webhook_event(org_id: uuid.UUID, event_type: str, payload: dict[str, Any]) -> None:
+    _producer().send_task("worker.dispatch_webhook_event", args=[str(org_id), event_type, payload])

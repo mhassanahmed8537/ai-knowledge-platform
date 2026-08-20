@@ -21,12 +21,17 @@ _TOKEN_RE = re.compile(r"[a-z0-9]+")
 
 @runtime_checkable
 class EmbeddingProvider(Protocol):
+    name: str
+    model: str
     dim: int
 
     def embed(self, texts: list[str]) -> list[list[float]]: ...
 
 
 class FakeEmbeddingProvider:
+    name = "fake"
+    model = "fake"
+
     def __init__(self, dim: int) -> None:
         self.dim = dim
 
@@ -49,6 +54,8 @@ class FakeEmbeddingProvider:
 
 
 class OpenAIEmbeddingProvider:
+    name = "openai"
+
     def __init__(self, *, api_key: str, model: str, dim: int, base_url: str) -> None:
         self.api_key = api_key
         self.model = model
@@ -76,6 +83,8 @@ class GeminiEmbeddingProvider:
     configured dimension and the vectors drop into the existing pgvector column
     without a schema migration.
     """
+
+    name = "gemini"
 
     def __init__(self, *, api_key: str, model: str, dim: int, base_url: str) -> None:
         self.api_key = api_key

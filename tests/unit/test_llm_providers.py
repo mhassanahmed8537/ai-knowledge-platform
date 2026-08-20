@@ -1,4 +1,4 @@
-from core.providers.llm import StubLLMProvider, to_gemini_contents
+from core.providers.llm import StubLLMProvider, UsageAccumulator, to_gemini_contents
 
 SYSTEM = """You answer from sources.
 
@@ -64,3 +64,22 @@ async def test_stub_emits_multiple_chunks() -> None:
     ]
     assert len(chunks) > 3  # genuinely streamed, not one blob
     assert provider.name == "stub"
+
+
+async def test_stub_fills_usage_accumulator_when_given_one() -> None:
+    provider = StubLLMProvider()
+    usage = UsageAccumulator()
+    await _collect(
+        provider.astream(system=SYSTEM, messages=[{"role": "user", "content": "Why?"}], usage=usage)
+    )
+    assert usage.input_tokens > 0
+    assert usage.output_tokens > 0
+
+
+async def test_stub_leaves_usage_accumulator_untouched_when_not_given() -> None:
+    provider = StubLLMProvider()
+    # Should not raise when usage is omitted (the default).
+    text = await _collect(
+        provider.astream(system=SYSTEM, messages=[{"role": "user", "content": "Why?"}])
+    )
+    assert text

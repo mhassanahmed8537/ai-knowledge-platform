@@ -8,7 +8,7 @@ celery_app = Celery(
     "worker",
     broker=settings.broker_url,
     backend=settings.redis_url,
-    include=["worker.tasks.ping", "worker.tasks.ingest"],
+    include=["worker.tasks.ping", "worker.tasks.ingest", "worker.tasks.webhooks"],
 )
 
 celery_app.conf.update(

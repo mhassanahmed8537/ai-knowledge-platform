@@ -17,9 +17,11 @@ from core import storage
 from core.chunking import chunk_text, estimate_tokens
 from core.config import get_settings
 from core.db import get_sessionmaker, set_org_context
-from core.enums import DocumentStatus
+from core.enums import DocumentStatus, UsageKind
 from core.models import Document, DocumentChunk
 from core.providers.embeddings import get_embedding_provider
+from core.providers.pricing import embedding_cost_usd
+from core.usage import record_usage
 
 
 def extract_pdf_text(data: bytes) -> str:
@@ -85,6 +87,24 @@ async def run_ingestion(document_id: uuid.UUID, org_id: uuid.UUID) -> int:
                         token_count=estimate_tokens(content),
                         embedding=embedding,
                     )
+                )
+            if chunks:
+                total_tokens = sum(estimate_tokens(c) for c in chunks)
+                # Budget-crossing is intentionally not checked here: generation
+                # (chat.py) already checks on every turn and is the dominant
+                # cost driver, so a second alert path for embeddings would
+                # mostly just duplicate it.
+                await record_usage(
+                    session,
+                    org_id=org_id,
+                    user_id=None,
+                    kind=UsageKind.EMBEDDING,
+                    provider=provider.name,
+                    model=provider.model,
+                    input_tokens=total_tokens,
+                    output_tokens=0,
+                    cost_usd=embedding_cost_usd(provider.name, provider.model, total_tokens),
+                    document_id=document_id,
                 )
             doc = await session.get(Document, document_id)
             if doc is not None:

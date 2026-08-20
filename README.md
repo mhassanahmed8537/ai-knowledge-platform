@@ -2,10 +2,12 @@
 
 An enterprise-grade, multi-tenant **RAG (Retrieval-Augmented Generation)** platform. Organizations upload their private documents; their users ask natural-language questions and receive streamed, cited answers grounded in their own corpus — with strict tenant isolation, auth, observability, and cost tracking throughout.
 
-> Status: **Phase 4 complete — RAG chat with citations.** Upload PDFs, ask
-> questions, and get streamed answers grounded in your own corpus with inline
-> citations back to the source chunk — over a LangGraph retrieve→generate→cite
-> pipeline, with multi-turn memory and per-tenant prompt versioning.
+> Status: **Phase 5 in progress — usage analytics, cost tracking, budget
+> alerts, and webhooks.** Every generation and embedding call is recorded as a
+> priced usage event, tenants can query aggregate spend and set a monthly
+> budget, and outbound webhooks fire on document completion and budget
+> crossings — on top of the Phase 4 RAG chat pipeline with citations, session
+> memory, and per-tenant prompt versioning.
 
 ## Architecture at a glance
 
@@ -253,6 +255,43 @@ pipeline runs and is CI-tested without any vendor key.
 > fit without a migration — but previously-ingested documents must be re-embedded.
 > Generation providers can be swapped freely with no such cost.
 
+## Usage analytics, cost tracking, budgets & webhooks (Phase 5)
+
+Every generation call (`POST /conversations/{id}/messages`) and embedding
+batch (ingestion) is recorded as a `usage_events` row — token counts and a
+priced `cost_usd`, regardless of vendor (the zero-cost `stub`/`fake` dev
+defaults record token volume with `cost_usd = 0`, so analytics work fully
+offline). Pricing is a static USD-per-1M-token table in
+`core/providers/pricing.py`; an unpriced (provider, model) pair costs $0
+rather than raising.
+
+```
+GET /usage/summary   -> month-to-date cost, budget status, totals by kind
+GET /usage/events     -> paginated raw event history
+GET  /organizations/me   -> current org, including monthly_budget_usd
+PATCH /organizations/me  -> set or clear the budget (admin only)
+```
+
+**Budget alerts:** setting `monthly_budget_usd` doesn't block requests — it
+only fires a `budget.alert` webhook on the one request that pushes
+month-to-date spend from under budget to at-or-over it (`core.usage.record_usage`
+tracks the crossing edge), so a tenant gets exactly one alert per monthly
+cycle rather than one per request thereafter. Embedding spend counts toward
+the same budget but doesn't check crossing itself — generation runs on every
+chat turn and is the dominant cost driver, so it's the single check point.
+
+**Webhooks:** tenants register outbound endpoints via `POST /webhooks`
+(admin only; the signing secret is returned once, at creation). Deliveries are
+signed with `X-Webhook-Signature: HMAC-SHA256(secret, body)` (verify with
+`hmac.compare_digest`, never `==`) and best-effort — a failing endpoint is
+skipped and logged, never retried or blocking. Events:
+
+| Event | Fired from | When |
+| --- | --- | --- |
+| `document.ready` | worker (`ingest_document` task) | ingestion completes |
+| `document.failed` | worker (`ingest_document` task) | ingestion raises |
+| `budget.alert` | api (`chat.py`, after a generation turn) | month-to-date spend crosses the budget |
+
 ## Build plan
 
 - ✅ **Phase 0** — Scaffolding, local dev stack, CI
@@ -260,5 +299,5 @@ pipeline runs and is CI-tested without any vendor key.
 - ✅ **Phase 2** — Ingestion: PDF upload → MinIO → Celery → extract → chunk → embed → pgvector
 - ✅ **Phase 3** — Hybrid retrieval: BM25 (Postgres FTS) + pgvector, Reciprocal Rank Fusion
 - ✅ **Phase 4** — Generation: LangGraph pipeline, SSE streaming, session memory, inline citations, prompt versioning
-- **Phase 5** — Admin/ops: usage analytics, per-tenant cost tracking + budget alerts, webhooks
+- 🚧 **Phase 5** — Admin/ops: usage analytics, per-tenant cost tracking + budget alerts, webhooks
 - **Phase 6** — K8s/Terraform/CI-CD hardening, security pass

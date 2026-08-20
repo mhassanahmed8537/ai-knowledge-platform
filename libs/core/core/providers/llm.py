@@ -10,6 +10,7 @@ activate via config — nothing outside this module knows which vendor is in use
 
 import re
 from collections.abc import AsyncIterator
+from dataclasses import dataclass
 from functools import lru_cache
 from typing import Any, Protocol, runtime_checkable
 
@@ -19,11 +20,31 @@ from core.config import get_settings
 _SOURCE_RE = re.compile(r"^\[(\d+)\]", re.MULTILINE)
 
 
+@dataclass
+class UsageAccumulator:
+    """Filled in by a provider as it streams, for cost tracking.
+
+    Callers create one fresh instance per request (providers are cached
+    singletons — see ``get_llm_provider`` — so state can't be held on the
+    provider itself without leaking across concurrent requests).
+    """
+
+    input_tokens: int = 0
+    output_tokens: int = 0
+
+
 @runtime_checkable
 class LLMProvider(Protocol):
     name: str
+    model: str
 
-    def astream(self, *, system: str, messages: list[dict[str, str]]) -> AsyncIterator[str]: ...
+    def astream(
+        self,
+        *,
+        system: str,
+        messages: list[dict[str, str]],
+        usage: UsageAccumulator | None = None,
+    ) -> AsyncIterator[str]: ...
 
 
 class StubLLMProvider:
@@ -34,8 +55,15 @@ class StubLLMProvider:
     """
 
     name = "stub"
+    model = "stub"
 
-    def astream(self, *, system: str, messages: list[dict[str, str]]) -> AsyncIterator[str]:
+    def astream(
+        self,
+        *,
+        system: str,
+        messages: list[dict[str, str]],
+        usage: UsageAccumulator | None = None,
+    ) -> AsyncIterator[str]:
         question = next((m["content"] for m in reversed(messages) if m["role"] == "user"), "")
         sources = _SOURCE_RE.findall(system)
         citations = "".join(f"[{n}]" for n in sources) or "(no sources retrieved)"
@@ -43,6 +71,12 @@ class StubLLMProvider:
             f"Based on the retrieved context, here is the answer to "
             f"{question.strip()!r}. {citations}"
         )
+        if usage is not None:
+            # Word-count heuristic: cheap, deterministic, and costs $0 anyway
+            # (the stub has no pricing entry), so precision doesn't matter here.
+            prompt_words = len(system.split()) + sum(len(m["content"].split()) for m in messages)
+            usage.input_tokens = prompt_words
+            usage.output_tokens = len(text.split())
 
         async def _gen() -> AsyncIterator[str]:
             # Emit word-by-word so the SSE streaming path is genuinely exercised.
@@ -65,14 +99,20 @@ class AnthropicLLMProvider:
         import anthropic
 
         self._client = anthropic.AsyncAnthropic(api_key=api_key)
-        self._model = model
+        self.model = model
         self._max_tokens = max_tokens
         self._effort = effort
 
-    def astream(self, *, system: str, messages: list[dict[str, str]]) -> AsyncIterator[str]:
+    def astream(
+        self,
+        *,
+        system: str,
+        messages: list[dict[str, str]],
+        usage: UsageAccumulator | None = None,
+    ) -> AsyncIterator[str]:
         async def _gen() -> AsyncIterator[str]:
             kwargs: dict[str, Any] = {
-                "model": self._model,
+                "model": self.model,
                 "max_tokens": self._max_tokens,
                 "system": system,
                 "messages": messages,
@@ -82,6 +122,10 @@ class AnthropicLLMProvider:
             async with self._client.messages.stream(**kwargs) as stream:
                 async for text in stream.text_stream:
                     yield text
+                if usage is not None:
+                    final = await stream.get_final_message()
+                    usage.input_tokens = final.usage.input_tokens
+                    usage.output_tokens = final.usage.output_tokens
 
         return _gen()
 
@@ -93,20 +137,28 @@ class OpenAILLMProvider:
 
     def __init__(self, *, api_key: str, model: str, max_tokens: int, base_url: str) -> None:
         self._api_key = api_key
-        self._model = model
+        self.model = model
         self._max_tokens = max_tokens
         self._base_url = base_url.rstrip("/")
 
-    def astream(self, *, system: str, messages: list[dict[str, str]]) -> AsyncIterator[str]:
+    def astream(
+        self,
+        *,
+        system: str,
+        messages: list[dict[str, str]],
+        usage: UsageAccumulator | None = None,
+    ) -> AsyncIterator[str]:
         async def _gen() -> AsyncIterator[str]:
             import json
 
             import httpx
 
             payload = {
-                "model": self._model,
+                "model": self.model,
                 "max_tokens": self._max_tokens,
                 "stream": True,
+                # Without this, the final SSE chunk carries no usage data.
+                "stream_options": {"include_usage": True},
                 "messages": [{"role": "system", "content": system}, *messages],
             }
             async with (
@@ -125,9 +177,13 @@ class OpenAILLMProvider:
                     data = line[len("data: ") :]
                     if data == "[DONE]":
                         break
-                    delta = json.loads(data)["choices"][0].get("delta", {})
-                    if content := delta.get("content"):
-                        yield content
+                    chunk = json.loads(data)
+                    if usage is not None and (chunk_usage := chunk.get("usage")):
+                        usage.input_tokens = chunk_usage.get("prompt_tokens", 0)
+                        usage.output_tokens = chunk_usage.get("completion_tokens", 0)
+                    for choice in chunk.get("choices", []):
+                        if content := choice.get("delta", {}).get("content"):
+                            yield content
 
         return _gen()
 
@@ -154,11 +210,17 @@ class GeminiLLMProvider:
 
     def __init__(self, *, api_key: str, model: str, max_tokens: int, base_url: str) -> None:
         self._api_key = api_key
-        self._model = model
+        self.model = model
         self._max_tokens = max_tokens
         self._base_url = base_url.rstrip("/")
 
-    def astream(self, *, system: str, messages: list[dict[str, str]]) -> AsyncIterator[str]:
+    def astream(
+        self,
+        *,
+        system: str,
+        messages: list[dict[str, str]],
+        usage: UsageAccumulator | None = None,
+    ) -> AsyncIterator[str]:
         async def _gen() -> AsyncIterator[str]:
             import json
 
@@ -169,7 +231,7 @@ class GeminiLLMProvider:
                 "systemInstruction": {"parts": [{"text": system}]},
                 "generationConfig": {"maxOutputTokens": self._max_tokens},
             }
-            url = f"{self._base_url}/models/{self._model}:streamGenerateContent"
+            url = f"{self._base_url}/models/{self.model}:streamGenerateContent"
             async with (
                 httpx.AsyncClient(timeout=120.0) as client,
                 client.stream(
@@ -184,6 +246,11 @@ class GeminiLLMProvider:
                     if not line.startswith("data: "):
                         continue
                     chunk = json.loads(line[len("data: ") :])
+                    # Gemini reports a running total on every chunk, so the last
+                    # one seen holds the final counts.
+                    if usage is not None and (meta := chunk.get("usageMetadata")):
+                        usage.input_tokens = meta.get("promptTokenCount", 0)
+                        usage.output_tokens = meta.get("candidatesTokenCount", 0)
                     for candidate in chunk.get("candidates", []):
                         for part in candidate.get("content", {}).get("parts", []):
                             if text := part.get("text"):

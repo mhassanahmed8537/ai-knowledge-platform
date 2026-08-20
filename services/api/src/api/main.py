@@ -4,7 +4,18 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from starlette.middleware.sessions import SessionMiddleware
 
-from api.routers import api_keys, auth, chat, documents, health, search, users
+from api.routers import (
+    api_keys,
+    auth,
+    chat,
+    documents,
+    health,
+    organizations,
+    search,
+    usage,
+    users,
+    webhooks,
+)
 from core.config import get_settings
 from core.db import get_auth_engine, get_engine
 
@@ -29,10 +40,13 @@ def create_app() -> FastAPI:
     app.include_router(health.router)
     app.include_router(auth.router)
     app.include_router(users.router)
+    app.include_router(organizations.router)
     app.include_router(documents.router)
     app.include_router(api_keys.router)
     app.include_router(search.router)
     app.include_router(chat.router)
+    app.include_router(usage.router)
+    app.include_router(webhooks.router)
     return app
 
 

@@ -16,7 +16,7 @@ from langgraph.graph import END, START, StateGraph
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.config import get_settings
-from core.providers.llm import get_llm_provider
+from core.providers.llm import UsageAccumulator, get_llm_provider
 from core.rag.prompts import (
     Citation,
     build_system_prompt,
@@ -36,6 +36,9 @@ class RAGState(TypedDict, total=False):
     system_prompt: str
     answer: str
     citations: list[Citation]
+    usage: UsageAccumulator
+    llm_provider: str
+    llm_model: str
 
 
 async def retrieve_node(state: RAGState) -> dict[str, Any]:
@@ -55,11 +58,19 @@ async def generate_node(state: RAGState) -> dict[str, Any]:
     provider = get_llm_provider()
     messages = [*state.get("history", []), {"role": "user", "content": state["query"]}]
 
+    usage = UsageAccumulator()
     parts: list[str] = []
-    async for token in provider.astream(system=state["system_prompt"], messages=messages):
+    async for token in provider.astream(
+        system=state["system_prompt"], messages=messages, usage=usage
+    ):
         parts.append(token)
         writer({"token": token})
-    return {"answer": "".join(parts)}
+    return {
+        "answer": "".join(parts),
+        "usage": usage,
+        "llm_provider": provider.name,
+        "llm_model": provider.model,
+    }
 
 
 async def cite_node(state: RAGState) -> dict[str, Any]:

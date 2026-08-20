@@ -20,11 +20,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.deps import Principal, get_principal
 from api.schemas import ChatRequest, ConversationCreate, ConversationOut, MessageOut
+from api.tasks import enqueue_webhook_event
 from core.config import get_settings
 from core.db import get_sessionmaker, set_org_context
-from core.enums import MessageRole
+from core.enums import MessageRole, UsageKind, WebhookEvent
 from core.models import Conversation, Message
+from core.providers.llm import UsageAccumulator
+from core.providers.pricing import generation_cost_usd
 from core.rag.graph import stream_answer
+from core.usage import record_usage
 
 router = APIRouter(prefix="/conversations", tags=["chat"])
 
@@ -97,6 +101,7 @@ async def chat(
         -settings.max_history_messages :
     ]
     org_id = principal.org_id
+    user_id = principal.user.id
     question = body.message
 
     async def event_stream() -> AsyncIterator[str]:
@@ -117,6 +122,8 @@ async def chat(
 
             parts: list[str] = []
             citations: list[dict[str, Any]] = []
+            final_state: dict[str, Any] = {}
+            budget_crossed = False
             async with session.begin():
                 await set_org_context(session, org_id)  # SET LOCAL is per-transaction
                 async for kind, payload in stream_answer(session, question, history):
@@ -124,7 +131,8 @@ async def chat(
                         parts.append(payload)
                         yield _sse("token", {"text": payload})
                     else:
-                        citations = [asdict(c) for c in payload.get("citations", [])]
+                        final_state = payload
+                        citations = [asdict(c) for c in final_state.get("citations", [])]
 
                 answer = "".join(parts)
                 session.add(
@@ -135,6 +143,33 @@ async def chat(
                         content=answer,
                         citations=citations or None,
                     )
+                )
+
+                usage: UsageAccumulator = final_state.get("usage") or UsageAccumulator()
+                cost = generation_cost_usd(
+                    final_state.get("llm_provider", ""),
+                    final_state.get("llm_model", ""),
+                    usage.input_tokens,
+                    usage.output_tokens,
+                )
+                _, budget_crossed = await record_usage(
+                    session,
+                    org_id=org_id,
+                    user_id=user_id,
+                    kind=UsageKind.GENERATION,
+                    provider=final_state.get("llm_provider", ""),
+                    model=final_state.get("llm_model", ""),
+                    input_tokens=usage.input_tokens,
+                    output_tokens=usage.output_tokens,
+                    cost_usd=cost,
+                    conversation_id=conversation_id,
+                )
+
+            if budget_crossed:
+                enqueue_webhook_event(
+                    org_id,
+                    WebhookEvent.BUDGET_ALERT.value,
+                    {"conversation_id": str(conversation_id)},
                 )
 
             yield _sse("citations", {"citations": citations})

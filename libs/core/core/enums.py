@@ -22,3 +22,14 @@ class OAuthProvider(enum.StrEnum):
 class MessageRole(enum.StrEnum):
     USER = "user"
     ASSISTANT = "assistant"
+
+
+class UsageKind(enum.StrEnum):
+    GENERATION = "generation"
+    EMBEDDING = "embedding"
+
+
+class WebhookEvent(enum.StrEnum):
+    DOCUMENT_READY = "document.ready"
+    DOCUMENT_FAILED = "document.failed"
+    BUDGET_ALERT = "budget.alert"

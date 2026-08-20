@@ -1,9 +1,10 @@
 import uuid
 from datetime import datetime
+from decimal import Decimal
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, HttpUrl
 
-from core.enums import DocumentStatus, MessageRole, UserRole
+from core.enums import DocumentStatus, MessageRole, UsageKind, UserRole, WebhookEvent
 from core.retrieval import SearchMode
 
 
@@ -36,7 +37,12 @@ class OrganizationOut(BaseModel):
     id: uuid.UUID
     name: str
     slug: str
+    monthly_budget_usd: Decimal | None
     created_at: datetime
+
+
+class OrganizationUpdate(BaseModel):
+    monthly_budget_usd: Decimal | None = Field(default=None, ge=0)
 
 
 class UserOut(BaseModel):
@@ -169,3 +175,53 @@ class ApiKeyCreated(ApiKeyOut):
     """Returned only once at creation — includes the plaintext key."""
 
     key: str
+
+
+class UsageEventOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    kind: UsageKind
+    provider: str
+    model: str
+    input_tokens: int
+    output_tokens: int
+    cost_usd: Decimal
+    conversation_id: uuid.UUID | None
+    document_id: uuid.UUID | None
+    created_at: datetime
+
+
+class UsageKindTotals(BaseModel):
+    input_tokens: int
+    output_tokens: int
+    cost_usd: Decimal
+
+
+class UsageSummaryOut(BaseModel):
+    month_to_date_cost_usd: Decimal
+    monthly_budget_usd: Decimal | None
+    budget_used_pct: float | None
+    over_budget: bool
+    by_kind: dict[UsageKind, UsageKindTotals]
+
+
+class WebhookCreate(BaseModel):
+    url: HttpUrl
+    event_types: list[WebhookEvent] = Field(min_length=1)
+
+
+class WebhookOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    url: str
+    event_types: list[WebhookEvent]
+    is_active: bool
+    created_at: datetime
+
+
+class WebhookCreated(WebhookOut):
+    """Returned only once at creation — includes the signing secret."""
+
+    secret: str

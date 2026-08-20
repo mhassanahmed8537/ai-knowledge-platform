@@ -1,5 +1,6 @@
 import uuid
 from datetime import datetime
+from decimal import Decimal
 
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
@@ -9,6 +10,7 @@ from sqlalchemy import (
     ForeignKey,
     Integer,
     MetaData,
+    Numeric,
     String,
     Text,
     UniqueConstraint,
@@ -20,7 +22,7 @@ from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 from core.config import get_settings
-from core.enums import DocumentStatus, MessageRole, OAuthProvider, UserRole
+from core.enums import DocumentStatus, MessageRole, OAuthProvider, UsageKind, UserRole
 
 EMBEDDING_DIM = get_settings().embedding_dim
 
@@ -66,6 +68,9 @@ class Organization(Base):
     id: Mapped[uuid.UUID] = _pk()
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     slug: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
+    # Soft cap on month-to-date spend (Phase 5); null = unlimited. Crossing it
+    # fires a "budget.alert" webhook rather than blocking requests.
+    monthly_budget_usd: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
     created_at: Mapped[datetime] = _created_at()
     updated_at: Mapped[datetime] = _updated_at()
 
@@ -251,4 +256,62 @@ class PromptTemplate(Base):
     version: Mapped[int] = mapped_column(Integer, nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    created_at: Mapped[datetime] = _created_at()
+
+
+class UsageEvent(Base):
+    """One billable unit of work (a generation call or an embedding batch).
+
+    Recorded regardless of cost (even the zero-cost stub/fake providers), so
+    token-volume analytics work offline; ``cost_usd`` is only nonzero once a
+    priced vendor is configured (see ``core.providers.pricing``).
+    """
+
+    __tablename__ = "usage_events"
+
+    id: Mapped[uuid.UUID] = _pk()
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    kind: Mapped[UsageKind] = mapped_column(
+        PgEnum(UsageKind, name="usage_kind", values_callable=lambda e: [m.value for m in e]),
+        nullable=False,
+    )
+    provider: Mapped[str] = mapped_column(String(64), nullable=False)
+    model: Mapped[str] = mapped_column(String(128), nullable=False)
+    input_tokens: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    output_tokens: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    cost_usd: Mapped[Decimal] = mapped_column(
+        Numeric(12, 6), nullable=False, server_default=text("0")
+    )
+    conversation_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("conversations.id", ondelete="SET NULL"), nullable=True
+    )
+    document_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("documents.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = _created_at()
+
+
+class OrgWebhook(Base):
+    """A tenant-configured outbound webhook (Phase 5).
+
+    ``secret`` signs each delivery (HMAC-SHA256 over the raw body, see
+    ``core.webhooks.sign_payload``) so receivers can verify authenticity; it is
+    returned to the caller only once, at creation.
+    """
+
+    __tablename__ = "org_webhooks"
+
+    id: Mapped[uuid.UUID] = _pk()
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    url: Mapped[str] = mapped_column(String(2048), nullable=False)
+    secret: Mapped[str] = mapped_column(String(255), nullable=False)
+    event_types: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
     created_at: Mapped[datetime] = _created_at()
