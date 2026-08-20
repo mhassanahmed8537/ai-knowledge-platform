@@ -1,0 +1,22 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - serviceaccounts.yaml
+  - configmap.yaml
+  - api-deployment.yaml
+  - api-service.yaml
+  - worker-deployment.yaml
+  - networkpolicy.yaml
+  - ingress.yaml
+  # migration-job.yaml is deliberately NOT listed here: it uses
+  # `generateName` (a fresh Job object per deploy, see the file's own
+  # comment for why), and kustomize's resource graph requires a stable
+  # `metadata.name` to track/patch objects by identity. Apply it directly
+  # with `kubectl apply -f infra/k8s/base/migration-job.yaml -n <namespace>`
+  # as its own pre-deploy step instead.
+
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: ai-knowledge-platform
+      app.kubernetes.io/managed-by: kustomize

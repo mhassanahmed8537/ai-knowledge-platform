@@ -1,0 +1,150 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker
+  labels:
+    app.kubernetes.io/name: worker
+    app.kubernetes.io/part-of: ai-knowledge-platform
+  annotations:
+    checkov.io/skip1: "CKV_K8S_43=Digest-pinning needs CI to publish real images first -- see infra/k8s/README.md"
+    checkov.io/skip2: "CKV_K8S_35=core.config.Settings reads from the environment (pydantic-settings); file-mounted secrets need a broader config-loading change -- see infra/k8s/README.md"
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: worker
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: worker
+        app.kubernetes.io/part-of: ai-knowledge-platform
+    spec:
+      serviceAccountName: worker
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: worker
+      # Celery's prefork pool forks worker processes; SIGTERM only tells the
+      # main process to stop taking new tasks, in-flight ones (a chat turn's
+      # embedding pass, PDF extraction) need real time to finish rather than
+      # being killed mid-write.
+      terminationGracePeriodSeconds: 60
+      # Explicit at both levels: the ServiceAccount already sets this (see
+      # serviceaccounts.yaml), but a Pod spec can override that default, so
+      # static scanners (and future editors) shouldn't have to trace back to
+      # the ServiceAccount to confirm it.
+      automountServiceAccountToken: false
+      containers:
+        - name: worker
+          image: ghcr.io/mhassanahmed8537/ai-knowledge-platform-worker:latest
+          # Always, not IfNotPresent: images are tag-pinned (:dev, :<git-sha>
+          # once CI publishes them — see .github/workflows/ci.yml) rather than
+          # digest-pinned, so a stale node-local cache under the same tag is a
+          # real risk IfNotPresent would silently accept.
+          imagePullPolicy: Always
+          envFrom:
+            - configMapRef:
+                name: app-config
+            - secretRef:
+                name: app-secrets
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: 1000m
+              memory: 1Gi
+          # There's no traffic-routing reason for a readiness probe (Celery
+          # workers aren't behind a Service) but it still gates PDB/rollout
+          # bookkeeping: a pod stuck unable to reach the broker shouldn't
+          # count as available capacity during a rolling update.
+          readinessProbe:
+            exec:
+              command:
+                - celery
+                - -A
+                - worker.celery_app.celery_app
+                - inspect
+                - ping
+                - -t
+                - "5"
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            timeoutSeconds: 8
+            failureThreshold: 3
+          livenessProbe:
+            exec:
+              command:
+                - celery
+                - -A
+                - worker.celery_app.celery_app
+                - inspect
+                - ping
+                - -t
+                - "5"
+            initialDelaySeconds: 20
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 3
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 1Gi
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: worker
+  labels:
+    app.kubernetes.io/name: worker
+    app.kubernetes.io/part-of: ai-knowledge-platform
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: worker
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: worker
+  labels:
+    app.kubernetes.io/name: worker
+    app.kubernetes.io/part-of: ai-knowledge-platform
+  annotations:
+    # CPU is a rough proxy here -- Celery queue depth would drive scaling
+    # decisions better but needs KEDA + a Redis-queue-length scaler, which
+    # isn't set up in this base. Revisit once queue-depth metrics exist.
+    ai-knowledge-platform/scaling-note: "CPU-based; consider KEDA on queue depth"
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: worker
+  minReplicas: 2
+  maxReplicas: 8
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 75

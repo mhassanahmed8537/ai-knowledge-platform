@@ -1,0 +1,12 @@
+# Dev runs the zero-cost stub/fake providers by default (same as local
+# docker-compose) so the cluster is exercisable without vendor API keys;
+# app-secrets can still carry real keys and this overridden to "anthropic"/
+# "openai" per person if someone wants to test against a real vendor.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: app-config
+data:
+  ENVIRONMENT: "dev"
+  LLM_PROVIDER: "stub"
+  EMBEDDING_PROVIDER: "fake"

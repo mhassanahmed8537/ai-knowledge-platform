@@ -27,8 +27,31 @@ from api.security import (
 from core.config import get_settings
 from core.enums import OAuthProvider, UserRole
 from core.models import OAuthAccount, Organization, RefreshToken, User
+from core.ratelimit import enforce_rate_limit
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+
+async def _rate_limit(request: Request, key: str) -> None:
+    settings = get_settings()
+    await enforce_rate_limit(
+        request,
+        key=key,
+        limit=settings.auth_rate_limit_per_minute,
+        window_seconds=settings.auth_rate_limit_window_seconds,
+    )
+
+
+async def _signup_rate_limit(request: Request) -> None:
+    await _rate_limit(request, "auth:signup")
+
+
+async def _login_rate_limit(request: Request) -> None:
+    await _rate_limit(request, "auth:login")
+
+
+async def _refresh_rate_limit(request: Request) -> None:
+    await _rate_limit(request, "auth:refresh")
 
 
 def _slugify(name: str) -> str:
@@ -58,6 +81,7 @@ async def _issue_tokens(session: AsyncSession, user: User) -> TokenResponse:
 async def signup(
     body: SignupRequest,
     session: AsyncSession = Depends(get_auth_session),
+    _rl: None = Depends(_signup_rate_limit),
 ) -> TokenResponse:
     existing = await session.scalar(select(User).where(User.email == body.email))
     if existing is not None:
@@ -90,6 +114,7 @@ async def signup(
 async def login(
     body: LoginRequest,
     session: AsyncSession = Depends(get_auth_session),
+    _rl: None = Depends(_login_rate_limit),
 ) -> TokenResponse:
     user = await session.scalar(select(User).where(User.email == body.email))
     if (
@@ -110,6 +135,7 @@ async def login(
 async def refresh(
     body: RefreshRequest,
     session: AsyncSession = Depends(get_auth_session),
+    _rl: None = Depends(_refresh_rate_limit),
 ) -> TokenResponse:
     token_hash = hash_secret(body.refresh_token)
     stored = await session.scalar(select(RefreshToken).where(RefreshToken.token_hash == token_hash))

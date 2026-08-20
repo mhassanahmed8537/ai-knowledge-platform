@@ -37,6 +37,13 @@ jobs:
         run: |
           uv run mypy libs/core/core services/api/src/api services/worker/src/worker
 
+      # Real dependency CVEs, not linting -- see the fixed pypdf/cryptography
+      # bumps in this same PR for what this catches in practice. pypdf in
+      # particular parses untrusted user-uploaded PDFs (core/ingestion.py),
+      # so a vulnerable version here is directly exploitable, not theoretical.
+      - name: Dependency vulnerability audit (pip-audit)
+        run: uvx pip-audit --path .venv/lib/python3.12/site-packages
+
   test:
     runs-on: ubuntu-latest
     services:
@@ -94,7 +101,7 @@ jobs:
             -e MINIO_ROOT_USER=minioadmin \
             -e MINIO_ROOT_PASSWORD=minioadmin \
             minio/minio:latest server /data
-          for i in $(seq 1 30); do
+          for _ in $(seq 1 30); do
             if curl -sf http://localhost:9000/minio/health/live > /dev/null; then
               echo "MinIO ready"; exit 0
             fi
@@ -107,3 +114,126 @@ jobs:
 
       - name: Run tests
         run: uv run pytest -q
+
+  secret-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0 # scans full history, not just the current tree
+
+      - name: Install gitleaks
+        run: |
+          curl -sSL -o gitleaks.tar.gz \
+            https://github.com/gitleaks/gitleaks/releases/download/v8.21.2/gitleaks_8.21.2_linux_x64.tar.gz
+          tar xzf gitleaks.tar.gz gitleaks
+          sudo mv gitleaks /usr/local/bin/
+
+      - name: Scan for committed secrets
+        run: gitleaks detect --source . --redact -v
+
+  infra-validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.9.8"
+          # validate/plan need real provider downloads and real cloud
+          # credentials this workflow doesn't have; fmt (syntax/style) is
+          # what actually runs here. See infra/terraform/README.md.
+          terraform_wrapper: false
+
+      - name: Terraform fmt check
+        run: terraform fmt -check -recursive infra/terraform
+
+      - name: Install kubectl (ships kustomize)
+        uses: azure/setup-kubectl@v4
+        with:
+          version: "v1.31.0"
+
+      - name: Install kubeconform
+        run: |
+          curl -sSL -o kubeconform.tar.gz \
+            https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz
+          tar xzf kubeconform.tar.gz kubeconform
+          sudo mv kubeconform /usr/local/bin/
+
+      - name: Render + validate k8s manifests (schema)
+        run: |
+          for overlay in infra/k8s/overlays/*/; do
+            kubectl kustomize "$overlay" | kubeconform -strict -summary -kubernetes-version 1.31.0
+          done
+          kubeconform -strict -summary -kubernetes-version 1.31.0 infra/k8s/base/migration-job.yaml
+
+      - name: Install checkov
+        run: pip install checkov==3.2.*
+
+      # Both frameworks run against a clean baseline -- every currently-known
+      # finding is either fixed or has a checkov:skip / checkov.io/skip
+      # annotation with its reasoning right next to the resource (see
+      # infra/terraform/README.md and infra/k8s/README.md). A new finding
+      # here means new infra, not noise.
+      - name: Checkov (Terraform)
+        run: checkov -d infra/terraform --framework terraform --compact
+
+      - name: Checkov (Kubernetes)
+        run: |
+          for overlay in infra/k8s/overlays/*/; do
+            kubectl kustomize "$overlay" > /tmp/k8s-rendered.yaml
+            checkov -f /tmp/k8s-rendered.yaml --framework kubernetes --compact
+          done
+          checkov -f infra/k8s/base/migration-job.yaml --framework kubernetes --compact
+
+  docker-build-scan:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target: [api, worker, migrate]
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Lint ${{ matrix.target }} Dockerfile
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: infra/docker/${{ matrix.target }}.Dockerfile
+
+      # type=gha caching and `load: true` both need the docker-container
+      # buildx driver -- the default docker context doesn't support either.
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build ${{ matrix.target }} image (no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: infra/docker/${{ matrix.target }}.Dockerfile
+          tags: ai-knowledge-platform-${{ matrix.target }}:ci
+          push: false
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # Report-only for now (soft-fail): base-image CVEs surface on their own
+      # schedule, independent of code changes in this repo, so failing the
+      # build on them would make CI red for reasons this PR can't fix.
+      # Findings still land in the Security tab either way. Tightening this
+      # to fail on CRITICAL/HIGH is a reasonable follow-up once there's a
+      # process for triaging/ignoring upstream-only findings.
+      - name: Scan image with Trivy
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ai-knowledge-platform-${{ matrix.target }}:ci
+          format: sarif
+          output: trivy-${{ matrix.target }}.sarif
+          severity: CRITICAL,HIGH
+          exit-code: "0"
+
+      - name: Upload Trivy results to the Security tab
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: trivy-${{ matrix.target }}.sarif
+          category: trivy-${{ matrix.target }}

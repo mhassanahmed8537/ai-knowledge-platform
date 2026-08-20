@@ -11,6 +11,12 @@ package = false
 members = ["services/api", "services/worker", "libs/core"]
 
 [dependency-groups]
+# Split out from `dev` so the migration Job image (infra/docker/migrate.Dockerfile)
+# can `uv sync --only-group migrate` and get just core + alembic — not the
+# linters/test tools `dev` also carries.
+migrate = [
+    "alembic>=1.14",
+]
 dev = [
     "ruff>=0.8.6",
     "mypy>=1.13",
@@ -18,8 +24,8 @@ dev = [
     "pytest-asyncio>=0.24",
     "httpx>=0.27",
     "pre-commit>=4.0",
-    "alembic>=1.14",
     "fpdf2>=2.8",
+    {include-group = "migrate"},
 ]
 
 [tool.ruff]

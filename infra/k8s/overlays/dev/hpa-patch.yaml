@@ -1,0 +1,19 @@
+# The base HPAs set minReplicas: 2, which would fight the replica-patch above
+# (an HPA always scales back up to its own minReplicas). A kind/dev cluster
+# also frequently has no metrics-server, so these mostly sit at their floor
+# regardless -- keep that floor at 1.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: api
+spec:
+  minReplicas: 1
+  maxReplicas: 3
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: worker
+spec:
+  minReplicas: 1
+  maxReplicas: 3

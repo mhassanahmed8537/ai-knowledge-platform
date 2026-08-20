@@ -39,6 +39,17 @@ class Settings(BaseSettings):
     # Signs the short-lived cookie that carries OAuth state across the redirect.
     session_secret: str = "dev-insecure-session-0123456789abcdef"
 
+    # --- Rate limiting (Phase 6) ---
+    # Redis-backed (not in-process): the API runs as multiple replicas in k8s,
+    # so an in-process counter would let each pod enforce an independent
+    # budget, silently multiplying the effective limit by replica count. This
+    # is a defense-in-depth backstop — the ingress is the primary throttle
+    # (see infra/k8s), so the default is deliberately generous rather than a
+    # tight per-login-attempt limit.
+    rate_limit_enabled: bool = True
+    auth_rate_limit_per_minute: int = 20
+    auth_rate_limit_window_seconds: int = 60
+
     # --- OAuth (Phase 1d; optional, empty disables the provider) ---
     google_client_id: str = ""
     google_client_secret: str = ""
@@ -94,6 +105,10 @@ class Settings(BaseSettings):
     @property
     def broker_url(self) -> str:
         return self.celery_broker_url or self.redis_url
+
+    @property
+    def is_local(self) -> bool:
+        return self.environment == "local"
 
 
 @lru_cache

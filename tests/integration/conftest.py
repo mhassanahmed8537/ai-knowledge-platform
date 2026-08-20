@@ -6,6 +6,10 @@ from collections.abc import AsyncIterator
 # Tests drive ingestion deterministically via run_ingestion; don't also enqueue
 # to a real worker (which would double-process and race on the chunk unique key).
 os.environ.setdefault("AUTO_INGEST_ON_UPLOAD", "false")
+# The rate limiter buckets by client IP, and every test shares one apparent IP
+# under httpx's ASGITransport — leaving it on would make unrelated tests trip
+# each other's budget. test_rate_limit.py re-enables it for its own assertions.
+os.environ.setdefault("RATE_LIMIT_ENABLED", "false")
 
 import asyncpg  # noqa: E402
 import pytest  # noqa: E402

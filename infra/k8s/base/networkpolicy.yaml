@@ -1,0 +1,115 @@
+# Default-deny, then explicit allows. Postgres (RDS), Redis (ElastiCache) and
+# S3 are managed AWS services outside the cluster's pod CIDR, reached over
+# the VPC network rather than via in-cluster DNS/Services, so egress can't be
+# scoped to a podSelector/namespaceSelector the way in-cluster traffic could
+# be -- it's scoped by port instead. Tightening this to specific CIDRs (the
+# RDS/ElastiCache subnet ranges from infra/terraform/modules/network) is the
+# natural next step once those ranges are stable per environment.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  labels:
+    app.kubernetes.io/part-of: ai-knowledge-platform
+spec:
+  podSelector: {}
+  policyTypes: ["Ingress", "Egress"]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: api-allow
+  labels:
+    app.kubernetes.io/part-of: ai-knowledge-platform
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: api
+  policyTypes: ["Ingress", "Egress"]
+  ingress:
+    # From the ingress controller only -- see overlays/*/kustomization.yaml
+    # for how `ingress-nginx-namespace-label` gets set per cluster.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+      ports:
+        - port: 8000
+          protocol: TCP
+  egress:
+    - to:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    - ports:
+        - port: 5432 # RDS Postgres
+          protocol: TCP
+        - port: 6379 # ElastiCache Redis
+          protocol: TCP
+        - port: 443 # S3, Anthropic/OpenAI/Gemini APIs
+          protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: db-migrate-allow
+  labels:
+    app.kubernetes.io/part-of: ai-knowledge-platform
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: db-migrate
+  policyTypes: ["Ingress", "Egress"]
+  egress:
+    - to:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    - ports:
+        - port: 5432
+          protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: worker-allow
+  labels:
+    app.kubernetes.io/part-of: ai-knowledge-platform
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: worker
+  policyTypes: ["Ingress", "Egress"]
+  # No ingress rule at all: nothing calls the worker directly, it only pulls
+  # from Redis. (The empty `ingress: []` implied by omission denies all,
+  # which is what we want.)
+  egress:
+    - to:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    - ports:
+        - port: 5432
+          protocol: TCP
+        - port: 6379
+          protocol: TCP
+        - port: 443
+          protocol: TCP

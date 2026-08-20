@@ -1,0 +1,17 @@
+# Single replica in dev: no HA needed, and it halves the already-modest node
+# footprint a dev cluster runs on. Kept as its own small patch file (rather
+# than folded into a Deployment strategic-merge patch) so it's obvious at a
+# glance which knobs this environment turns.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+spec:
+  replicas: 1
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker
+spec:
+  replicas: 1

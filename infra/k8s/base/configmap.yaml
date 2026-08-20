@@ -1,0 +1,34 @@
+# Non-secret settings only. Anything with a credential in it (DATABASE_URL,
+# AUTH_DATABASE_URL, MIGRATION_DATABASE_URL, REDIS_URL if it carries an AUTH
+# token, JWT_SECRET, SESSION_SECRET, S3_* keys, *_API_KEY) belongs in a
+# Secret sourced from AWS Secrets Manager via the External Secrets Operator —
+# see infra/terraform/modules/database and modules/eks for how those secrets
+# are provisioned. Committing a Secret manifest with real or placeholder
+# values here would train reviewers to expect secrets to live in git, which
+# is exactly the habit this setup is trying to avoid.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: app-config
+  labels:
+    app.kubernetes.io/part-of: ai-knowledge-platform
+data:
+  ENVIRONMENT: "production"
+  CHUNK_SIZE: "1000"
+  CHUNK_OVERLAP: "150"
+  MAX_UPLOAD_BYTES: "26214400"
+  AUTO_INGEST_ON_UPLOAD: "true"
+  EMBEDDING_PROVIDER: "openai"
+  EMBEDDING_DIM: "1536"
+  LLM_PROVIDER: "anthropic"
+  LLM_MAX_TOKENS: "4096"
+  LLM_EFFORT: "medium"
+  GENERATION_CONTEXT_CHUNKS: "8"
+  MAX_HISTORY_MESSAGES: "20"
+  RETRIEVAL_CANDIDATE_K: "50"
+  RRF_K: "60"
+  SEARCH_DEFAULT_LIMIT: "10"
+  SEARCH_MAX_LIMIT: "50"
+  RATE_LIMIT_ENABLED: "true"
+  AUTH_RATE_LIMIT_PER_MINUTE: "20"
+  AUTH_RATE_LIMIT_WINDOW_SECONDS: "60"

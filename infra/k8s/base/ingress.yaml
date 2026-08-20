@@ -1,0 +1,40 @@
+# host/TLS secretName are overlay-specific (see overlays/dev's patch) --
+# left as obviously-fake placeholders here so applying the base directly is a
+# visible no-op rather than a silent misconfiguration.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: api
+  labels:
+    app.kubernetes.io/name: api
+    app.kubernetes.io/part-of: ai-knowledge-platform
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    # App-level rate limiting (core.ratelimit) is a backstop; this is the
+    # primary throttle. Generous enough not to choke a legitimate burst of
+    # PDF uploads or a chat session's SSE stream.
+    nginx.ingress.kubernetes.io/limit-rps: "20"
+    # PDF uploads: keep in sync with MAX_UPLOAD_BYTES in configmap.yaml.
+    nginx.ingress.kubernetes.io/proxy-body-size: "25m"
+    # The chat endpoint streams SSE tokens as they're generated; a proxy
+    # buffer would hold the whole response until generation finishes.
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "120"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts: ["CHANGE-ME.example.com"]
+      secretName: api-tls
+  rules:
+    - host: CHANGE-ME.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: api
+                port:
+                  name: http

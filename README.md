@@ -2,12 +2,14 @@
 
 An enterprise-grade, multi-tenant **RAG (Retrieval-Augmented Generation)** platform. Organizations upload their private documents; their users ask natural-language questions and receive streamed, cited answers grounded in their own corpus — with strict tenant isolation, auth, observability, and cost tracking throughout.
 
-> Status: **Phase 5 in progress — usage analytics, cost tracking, budget
-> alerts, and webhooks.** Every generation and embedding call is recorded as a
-> priced usage event, tenants can query aggregate spend and set a monthly
-> budget, and outbound webhooks fire on document completion and budget
-> crossings — on top of the Phase 4 RAG chat pipeline with citations, session
-> memory, and per-tenant prompt versioning.
+> Status: **Phase 6 in progress — Kubernetes/Terraform IaC, CI/CD hardening,
+> and a security pass.** `infra/k8s` and `infra/terraform` now hold real,
+> validated manifests/modules (hardened Dockerfiles, IRSA-scoped least-privilege
+> roles, RLS-consistent secret handling); CI gained dependency, secret, and
+> IaC/container scanning; the app gained rate limiting, security headers, and
+> a startup guard against insecure default secrets — on top of Phase 5's
+> usage analytics, cost tracking, budget alerts, and webhooks, and the Phase 4
+> RAG chat pipeline with citations, session memory, and prompt versioning.
 
 ## Architecture at a glance
 
@@ -81,6 +83,7 @@ uv run ruff check .        # lint
 uv run ruff format .       # format
 uv run mypy libs/core/core services/api/src/api services/worker/src/worker
 uv run pytest -q           # unit + integration tests
+uvx pip-audit --path .venv/lib/python3.12/site-packages  # dependency CVEs
 pre-commit install         # enable git hooks
 ```
 
@@ -89,6 +92,12 @@ drive the real app via httpx against Postgres and are **auto-skipped when the DB
 unreachable** — bring up the stack and run `prepare_db.py` first to exercise them.
 They cover the auth flow, tenant RLS isolation, the RBAC matrix, and the API-key
 lifecycle, each in its own throwaway `itest-` org (cleaned up on teardown).
+
+CI also runs `infra-validate` (`terraform fmt`, `kubeconform`, `checkov` against
+both `infra/terraform` and `infra/k8s`), `secret-scan` (`gitleaks`), and
+`docker-build-scan` (`hadolint` + a no-push build + `trivy`) — see
+`infra/terraform/README.md` and `infra/k8s/README.md` for what each catches and
+the handful of findings that are deliberately accepted rather than fixed.
 
 CI (`.github/workflows/ci.yml`) runs lint + format-check + mypy, and a separate test
 job that spins up Postgres/Redis service containers, runs `prepare_db.py`, then the
@@ -292,6 +301,44 @@ skipped and logged, never retried or blocking. Events:
 | `document.failed` | worker (`ingest_document` task) | ingestion raises |
 | `budget.alert` | api (`chat.py`, after a generation turn) | month-to-date spend crosses the budget |
 
+## Infrastructure, CI/CD hardening & security pass (Phase 6)
+
+`infra/k8s` (Kustomize `base/` + `overlays/dev`) and `infra/terraform`
+(`modules/{network,database,cache,storage,eks}` + `envs/dev`) went from
+empty scaffolding to real, validated infrastructure — see
+`infra/k8s/README.md` and `infra/terraform/README.md` for the deployment
+runbooks and the small set of findings deliberately accepted rather than
+fixed (documented with reasoning, not silently suppressed).
+
+**App-level hardening**, alongside the infra:
+
+- **Rate limiting** (`core/ratelimit.py`) on `/auth/{signup,login,refresh}` —
+  Redis-backed rather than in-process, since the api now runs as multiple k8s
+  replicas and an in-process counter would let each pod enforce an
+  independent budget.
+- **Security headers** on every response (`X-Content-Type-Options`,
+  `X-Frame-Options`, `Referrer-Policy`, `Strict-Transport-Security` outside
+  local dev) and `/docs`/`/redoc`/`/openapi.json` disabled outside local dev.
+- **Startup guard**: the api refuses to start outside `ENVIRONMENT=local` if
+  `JWT_SECRET`/`SESSION_SECRET` are still the dev-default values, rather than
+  silently running with forgeable tokens.
+- **`app_user`/`app_auth` passwords** are now real Terraform-generated
+  secrets in production (`scripts/prepare_db.py` reads
+  `APP_USER_PASSWORD`/`APP_AUTH_PASSWORD`), not the hardcoded dev-only
+  literals in `db_bootstrap.sql` — closing the gap that file's own header
+  comment already flagged ("provisioned by Terraform... NOT by this script").
+- **Dockerfiles** rebuilt as multi-stage, non-root (uid 10001), healthchecked
+  images with a fully self-contained runtime venv (`--no-editable` — no `uv`,
+  no source tree needed at runtime); a new `migrate.Dockerfile` carries
+  Alembic (split into its own `migrate` dependency-group) for a k8s Job,
+  separate from the api/worker runtime images.
+- **Dependency CVEs fixed**: `pypdf` (parses untrusted uploaded PDFs) and
+  `cryptography` bumped past known vulnerabilities; `pip-audit` now runs in
+  CI to catch regressions.
+- **CI** gained `secret-scan` (gitleaks), `infra-validate` (`terraform fmt`,
+  `kubeconform`, `checkov` against both IaC trees), and `docker-build-scan`
+  (`hadolint` + build + `trivy`, SARIF uploaded to the Security tab).
+
 ## Build plan
 
 - ✅ **Phase 0** — Scaffolding, local dev stack, CI
@@ -299,5 +346,5 @@ skipped and logged, never retried or blocking. Events:
 - ✅ **Phase 2** — Ingestion: PDF upload → MinIO → Celery → extract → chunk → embed → pgvector
 - ✅ **Phase 3** — Hybrid retrieval: BM25 (Postgres FTS) + pgvector, Reciprocal Rank Fusion
 - ✅ **Phase 4** — Generation: LangGraph pipeline, SSE streaming, session memory, inline citations, prompt versioning
-- 🚧 **Phase 5** — Admin/ops: usage analytics, per-tenant cost tracking + budget alerts, webhooks
-- **Phase 6** — K8s/Terraform/CI-CD hardening, security pass
+- ✅ **Phase 5** — Admin/ops: usage analytics, per-tenant cost tracking + budget alerts, webhooks
+- 🚧 **Phase 6** — K8s/Terraform/CI-CD hardening, security pass
