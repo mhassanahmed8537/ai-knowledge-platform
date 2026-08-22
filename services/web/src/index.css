@@ -1,0 +1,108 @@
+@import "tailwindcss";
+
+/* Class-based dark mode (manual toggle via a `.dark` ancestor), not just
+   prefers-color-scheme -- see src/context/ThemeContext.tsx */
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --font-sans: "Inter var", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+  /* Brand: a violet-blue that reads as technical/AI without being generic
+     "purple SaaS gradient" -- kept to one hue family, varied by lightness. */
+  --color-brand-50: #f1f0ff;
+  --color-brand-100: #e4e1ff;
+  --color-brand-200: #cdc7ff;
+  --color-brand-300: #ab9dff;
+  --color-brand-400: #8b74ff;
+  --color-brand-500: #7050f5;
+  --color-brand-600: #5f3ce0;
+  --color-brand-700: #4f2fbd;
+  --color-brand-800: #402799;
+  --color-brand-900: #35237a;
+  --color-brand-950: #1f1350;
+
+  --color-success-500: #10b981;
+  --color-success-600: #059669;
+  --color-warning-500: #f59e0b;
+  --color-warning-600: #d97706;
+  --color-danger-500: #f43f5e;
+  --color-danger-600: #e11d48;
+  --color-info-500: #0ea5e9;
+
+  --shadow-soft: 0 1px 2px rgba(15, 15, 25, 0.04), 0 8px 24px -8px rgba(15, 15, 25, 0.08);
+  --shadow-soft-dark: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px -8px rgba(0, 0, 0, 0.5);
+}
+
+:root {
+  --bg: #f7f6fb;
+  --surface: #ffffff;
+  --surface-raised: #ffffff;
+  --border: #e6e4f0;
+  --border-strong: #d5d2e6;
+  --text: #17162b;
+  --text-muted: #6b6884;
+  --text-faint: #9b98b3;
+  --ring: var(--color-brand-500);
+}
+
+.dark {
+  --bg: #0e0d18;
+  --surface: #171526;
+  --surface-raised: #1e1b31;
+  --border: #2b2843;
+  --border-strong: #3a3658;
+  --text: #f1f0fa;
+  --text-muted: #a9a6c4;
+  --text-faint: #716e91;
+  --ring: var(--color-brand-400);
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-raised: var(--surface-raised);
+  --color-border-DEFAULT: var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-text: var(--text);
+  --color-text-muted: var(--text-muted);
+  --color-text-faint: var(--text-faint);
+  --color-ring: var(--ring);
+}
+
+@layer base {
+  * {
+    border-color: var(--border);
+  }
+  html {
+    color-scheme: light;
+  }
+  html.dark {
+    color-scheme: dark;
+  }
+  body {
+    background-color: var(--bg);
+    color: var(--text);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+  }
+  ::selection {
+    background-color: var(--color-brand-300);
+    color: var(--color-brand-950);
+  }
+}
+
+@layer utilities {
+  .scrollbar-thin {
+    scrollbar-width: thin;
+    scrollbar-color: var(--border-strong) transparent;
+  }
+  .scrollbar-thin::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    background-color: var(--border-strong);
+    border-radius: 999px;
+  }
+}
