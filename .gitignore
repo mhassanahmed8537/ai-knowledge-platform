@@ -43,3 +43,4 @@ Thumbs.db
 .terraform/
 *.tfvars
 !*.tfvars.example
+*.rdb
