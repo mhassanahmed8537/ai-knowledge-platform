@@ -62,6 +62,13 @@ services:
       dockerfile: infra/docker/api.Dockerfile
     ports:
       - "8000:8000"
+    # Loaded first so LLM_PROVIDER/ANTHROPIC_API_KEY/etc. flow through from
+    # the host's .env; the explicit `environment:` block below is applied
+    # on top and wins on conflicts (network-internal hostnames the host's
+    # .env can't know, e.g. DATABASE_URL pointing at "postgres" not
+    # "localhost").
+    env_file:
+      - .env
     environment:
       ENVIRONMENT: local
       DATABASE_URL: postgresql+asyncpg://app_user:app_password@postgres:5432/knowledge_platform
@@ -87,6 +94,8 @@ services:
     build:
       context: .
       dockerfile: infra/docker/worker.Dockerfile
+    env_file:
+      - .env
     environment:
       ENVIRONMENT: local
       DATABASE_URL: postgresql+asyncpg://app_user:app_password@postgres:5432/knowledge_platform
